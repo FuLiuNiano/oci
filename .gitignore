@@ -1,0 +1,13 @@
+data/
+.venv/
+__pycache__/
+*.pyc
+panel.log
+panel.pid
+.test-run-*/
+.selfcheck*/
+.browser-check*/
+.pytest_cache/
+.env
+*.zip
+*.tar.gz

@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+**/__pycache__
+.pytest_cache
+.test-run-*
+.selfcheck*
+.browser-check*
+data
+*.log
+*.zip
+*.tar.gz
+*.pem
+.env

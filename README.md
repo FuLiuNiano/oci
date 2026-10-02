@@ -1,0 +1,86 @@
+# OCI Panel 2.1
+
+只管理 Oracle Cloud 的自托管面板。管理员在自己的服务器登录，OCI API 私钥保存在本地数据库，不需要 Telegram、第三方账号激活或购买面板权限。
+
+## Linux + Docker 部署
+
+把修复版项目文件放到服务器的 `oci-panel` 目录，进入目录执行：
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose exec -T oci-panel cat /app/data/initial_admin_password.txt
+```
+
+访问 **http://服务器IP:9527**，用上面的初始密码登录，然后到「设置」修改密码。修改密码会使原有登录失效，需重新登录；初始密码文件也会删除。
+
+需要在服务器防火墙及云平台入站规则中放行 TCP 9527。面板未内置 TLS，直接访问时使用 `http://`。可以使用自己已有的 HTTPS 反向代理；示例在 `deploy/nginx.conf.example`。反向代理时保留 Host 和 WebSocket Upgrade 头。
+
+默认保存目录是项目中的 `data/`，Docker 自动挂载到 `/app/data`。更新项目、重建容器不会清除这个目录。请保留并备份整个目录，里面有账号私钥、SSH 凭据和面板设置。
+
+可选：复制 `.env.example` 为 `.env`，修改端口或监听地址。只有在已经配置 HTTPS 后才设置 `COOKIE_SECURE=1`。
+
+## 添加 OCI 账号与创建实例
+
+1. OCI 控制台的用户/API 密钥页面添加 API 密钥，取得 User OCID、Tenancy OCID、指纹和对应的 PEM 私钥。
+2. 「云账号」添加账号，填名称、区域以及以上配置，保存并点击「测试」。这是 **OCI API 私钥**，不同于用于登录虚拟机的 SSH 密钥。
+3. Compartment OCID 留空时只查询租户根目录；资源在子 compartment 中时必须填写那个 compartment 的 OCID。一个账号配置对应一个区域，可复制到其他已订阅区域。
+4. 「开机抢机」选择账号和规格，选择已有公网子网。如果没有子网，点击「创建公网网络」；会创建带 `oci-panel=managed` 标记的 VCN、互联网网关及公网子网，并开放 SSH 22 端口。它只管理面板创建的网络。
+5. 填写 **SSH 公钥**（例如 `ssh-ed25519 ...`），创建任务。创建后用对应 SSH 私钥登录；Ubuntu 镜像通常使用 `ubuntu` 用户，Oracle Linux 使用 `opc`。
+6. 任务遇到容量不足/限流/临时网络错误会重试，成功后停止。成功任务不能再次恢复，创建另一台应新建任务。从已有引导卷创建时固定使用那个卷所在的可用域。
+
+OCI API 权限由你的 IAM 策略决定。计算、网络、卷、对象存储、监控、用户和邮件管理可能需要不同权限。401 通常是密钥配置问题；403/404 也可能表示区域、compartment 或权限不匹配。面板免费不代表所有 OCI 资源免费：创建、扩容、提升磁盘性能前应确认账号额度。
+
+## 已提供的功能
+
+- 多 OCI 账号、区域复制、账号测试、实例列表、启停/重启/终止、A1 升降配、开机任务及从已有引导卷开机。
+- 公网 IP 更换、保留 IP 创建/绑定/删除、附加 IPv6（需 VCN 和子网预先启用 IPv6），以及创建公网网络。
+- 启动盘/块卷查询和扩容、性能调整、块卷创建/挂载/卸载/删除。
+- IAM 用户、邮箱、控制台密码、MFA 设备、API 公钥和 SMTP 凭据管理；可用范围取决于 OCI 用户体系及权限。
+- 配额、费用、对象存储 Bucket/文件、串口日志抓取。
+- SSH 网页终端、批量命令、SFTP 文件操作、二进制文件下载（最大 64 MB）、资源监控、端口转发（绑定服务器回环地址）。
+- 停机自动恢复、24 小时出站流量监控、可选邮件/Bark/Webhook 通知、域名与证书到期检查。
+- 可选 Cloudflare DNS 和 OCI 邮件域配置；没有配置这些外部服务也可管理 OCI。
+- MCP 接入：`/mcp`，使用设置页的 Bearer 令牌。令牌可操作云资源和执行 SSH 命令，应妥善保管。
+
+扩容改变云卷容量，系统中的分区和文件系统仍需按实际系统扩容。启动盘已用空间显示为未知，不用云卷容量冒充系统内使用量。
+
+### 重建与自动重启的行为
+
+「重建」按旧实例的镜像/规格创建替代实例，**保留旧实例和全部旧数据**，不会自动终止旧机。需要额外配额，公网 IP 也会改变。确认新实例能登录后，再手动释放旧资源。这不是保留实例 OCID 的原地重装。
+
+手动关机、流量超额关机不会被「自动拉起」再次启动。流量关停后应在确认原因后手动启动；关闭流量关停策略会取消该策略的启动阻止记录。
+
+SSH 首次成功连接会记录服务器主机公钥，后续公钥不匹配将拒绝连接。重装真实服务器后，先核实主机身份，再在面板点击「重置信任」。
+
+「串口日志」提供启动日志，不是交互式串行救援终端；不会宣称与参考项目全量功能一致。网络高级规则、自动 TLS 签发和交互串行控制台仍需 OCI 控制台或其他工具处理。
+
+## 更新、日志与备份
+
+```bash
+# 覆盖项目代码，保留 data/ 后重建
+docker compose up -d --build
+# 查看日志
+docker compose logs --tail 100 -f
+# 停止（保留数据）
+docker compose down
+```
+
+备份建议先停止容器再复制整个 `data/`，完成后启动。不要删除 `data/`。非 OCI 的旧账号记录会保留在旧数据库中，但此版本不显示或执行它们。
+
+## 验证
+
+```bash
+python selfcheck.py
+# 完整回归（开发环境）
+python -m pip install -r requirements-dev.txt
+python selfcheck.py --full
+```
+
+普通自检验证实际 HTTP 服务启动、登录、静态页面、修改密码和重启后的数据保留；完整自检还运行真实 OCI SDK 契约测试及本地真实 SSH/SFTP/WebSocket/端口转发测试。云回复在契约测试中模拟，测试不会创建真实云资源。可选浏览器检查需安装 Playwright 和 Chrome：`python tests/browser_smoke.py`。
+
+修复版已通过本地完整自检及 Chrome 操作检查。真实 OCI 权限、容量和服务器 Docker 构建需要在你的部署环境中确认。
+
+## 其他启动方式
+
+Python 3.12：`python -m pip install -r requirements.txt` 后执行 `python main.py`。Linux 上也可使用 `bash install.sh` 安装 systemd 服务。推荐已有 Docker 的服务器使用上面的 Compose 部署。

@@ -1,0 +1,18 @@
+services:
+  oci-panel:
+    build: .
+    container_name: oci-panel
+    ports:
+      - "${PANEL_BIND:-0.0.0.0}:${PANEL_PORT:-9527}:9527"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      COOKIE_SECURE: "${COOKIE_SECURE:-0}"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9527/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
