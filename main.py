@@ -1,6 +1,6 @@
 """OCI Panel v2 —— 自托管多云管理面板（甲骨文为主，WebSSH / 抢机 / 多云 / MCP 一体）。
 
-启动: python main.py，默认端口 9527。
+启动: python main.py，默认端口 9528。
 """
 import asyncio
 import contextlib
@@ -231,4 +231,4 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host=os.environ.get("HOST", "0.0.0.0"), port=int(os.environ.get("PORT", "9527")))
+    uvicorn.run(app, host=os.environ.get("HOST", "0.0.0.0"), port=int(os.environ.get("PORT", "9528")))

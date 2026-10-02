@@ -12,9 +12,9 @@ docker compose ps
 docker compose exec -T oci-panel cat /app/data/initial_admin_password.txt
 ```
 
-访问 **http://服务器IP:9527**，用上面的初始密码登录，然后到「设置」修改密码。修改密码会使原有登录失效，需重新登录；初始密码文件也会删除。
+访问 **http://服务器IP:9528**，用上面的初始密码登录，然后到「设置」修改密码。修改密码会使原有登录失效，需重新登录；初始密码文件也会删除。
 
-需要在服务器防火墙及云平台入站规则中放行 TCP 9527。面板未内置 TLS，直接访问时使用 `http://`。可以使用自己已有的 HTTPS 反向代理；示例在 `deploy/nginx.conf.example`。反向代理时保留 Host 和 WebSocket Upgrade 头。
+需要在服务器防火墙及云平台入站规则中放行 TCP 9528。面板未内置 TLS，直接访问时使用 `http://`。可以使用自己已有的 HTTPS 反向代理；示例在 `deploy/nginx.conf.example`。反向代理时保留 Host 和 WebSocket Upgrade 头。
 
 默认保存目录是项目中的 `data/`，Docker 自动挂载到 `/app/data`。更新项目、重建容器不会清除这个目录。请保留并备份整个目录，里面有账号私钥、SSH 凭据和面板设置。
 
