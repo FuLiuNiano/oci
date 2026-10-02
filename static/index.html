@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCI Panel · 自托管甲骨文云管理面板</title>
+<link rel="stylesheet" href="/static/vendor/xterm.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">⚡ OCI Panel <span class="muted" id="ver" style="font-size:12px"></span></div>
+  <div id="hdr-user" class="hide">
+    <span class="muted">甲骨文云 · 开机任务 · SSH 终端</span>
+    <button id="btn-logout" class="ghost">退出</button>
+  </div>
+</header>
+
+<div id="view-login" class="login-wrap hide">
+  <div class="login-card">
+    <h2>⚡ OCI Panel</h2>
+    <p class="muted">自托管甲骨文云管理面板</p>
+    <input id="login-pass" type="password" placeholder="管理员密码" autocomplete="current-password">
+    <button id="btn-login">登 录</button>
+    <p id="login-err" class="err"></p>
+  </div>
+</div>
+
+<main id="app" class="hide">
+<nav>
+  <button data-view="overview" class="active">概览</button>
+  <button data-view="instances">实例</button>
+  <button data-view="launch">开机抢机</button>
+  <button data-view="volumes">硬盘</button>
+  <button data-view="network">网络/DNS</button>
+  <button data-view="users">用户管理</button>
+  <button data-view="objects">对象存储</button>
+  <button data-view="domains">域名监控</button>
+  <button data-view="ssh">SSH 终端</button>
+  <button data-view="mail">邮件服务</button>
+  <button data-view="accounts">云账号</button>
+  <button data-view="settings">设置</button>
+</nav>
+
+<!-- 概览 -->
+<section id="view-overview" class="view">
+  <div class="cards" id="ov-cards"></div>
+  <div class="card"><h3 class="sec" style="margin-top:0">实例状态分布</h3><div id="ov-states" class="chips"></div>
+    <h3 class="sec">账号错误</h3><div id="ov-errors" class="muted"></div></div>
+  <div class="card"><h3 class="sec" style="margin-top:0">面板维护</h3>
+    <div class="bar">
+      <button id="btn-panel-log">查看日志</button>
+      <button id="btn-panel-restart" class="ghost">重启面板</button>
+      <button id="btn-panel-upgrade" class="ghost">升级</button>
+    </div>
+    <pre id="panel-log" class="logbox hide"></pre>
+  </div>
+</section>
+
+<!-- 实例 -->
+<section id="view-instances" class="view">
+  <div class="bar">
+    <select id="inst-account"></select>
+    <button id="btn-refresh-inst">刷新</button>
+    <label class="chk"><input type="checkbox" id="inst-auto" checked> 自动刷新(15s)</label>
+    <span id="inst-summary" class="muted"></span>
+
+  </div>
+  <div class="table-wrap"><table id="inst-table">
+    <thead><tr><th>云</th><th>名称</th><th>状态</th><th>规格</th><th>公网IP</th><th>私网IP</th><th>可用域</th><th>操作</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+
+</section>
+
+<!-- 开机抢机 -->
+<section id="view-launch" class="view">
+  <div class="card">
+    <h3 class="sec" style="margin-top:0">新建开机任务（OCI）</h3>
+    <div class="bar"><button id="btn-create-network" type="button" class="ghost">没有子网？创建公网网络</button><span class="muted">创建 VCN、互联网网关和公网子网，开放 SSH 22 端口。</span></div>
+    <p class="muted" style="font-size:12px">后台每 60 秒尝试（自动轮换可用域），容量不足持续重试，成功推送通知。任务成功后停止重试；请在创建前确认账号额度。</p>
+    <form id="launch-form"><div class="form-grid">
+      <div><label>OCI 账号</label><select id="l-account"></select></div>
+      <div><label>实例名称</label><input id="l-name" placeholder="auto-boot"></div>
+      <div><label>快捷预设</label><select id="l-preset">
+        <option value="a1x2">ARM A1 · 2核12G</option><option value="a1x1">ARM A1 · 1核6G</option>
+        <option value="a1x4">ARM A1 · 4核24G</option><option value="amd">AMD 微型 · 1核1G</option>
+      </select></div>
+      <div><label>形状</label><input id="l-shape" value="VM.Standard.A1.Flex"></div>
+      <div><label>OCPU</label><input id="l-ocpus" type="number" value="2"></div>
+      <div><label>内存 GB</label><input id="l-mem" type="number" value="12"></div>
+      <div><label>系统镜像（快速填充）</label><select id="l-os-sel">
+        <option value="Canonical Ubuntu|24.04">Ubuntu 24.04</option><option value="Canonical Ubuntu|22.04">Ubuntu 22.04</option>
+        <option value="Oracle Linux|9">Oracle Linux 9</option><option value="Oracle Linux|8">Oracle Linux 8</option>
+        <option value="Debian|12">Debian 12</option></select></div>
+      <div><label>系统名称</label><input id="l-os-name" value="Canonical Ubuntu"></div>
+      <div><label>系统版本</label><input id="l-os-version" value="24.04"></div>
+      <div><label>引导卷 GB</label><input id="l-boot" type="number" min="47" value="50"></div>
+      <div><label>可用域（留空=轮换）</label><select id="l-ad"><option value="">自动轮换</option></select></div>
+      <div><label>子网（留空=自动）</label><select id="l-subnet"><option value="">自动选择</option></select></div>
+      <div><label>从现有引导卷开机（可选，填卷OCID）</label><input id="l-bootvol" placeholder="ocid1.bootvolume..."></div>
+    </div>
+    <label class="muted" style="font-size:12px;display:block;margin:10px 0 3px">SSH 公钥（不填无法 SSH 登录）</label>
+    <textarea id="l-ssh" rows="2" placeholder="ssh-ed25519 AAAA... user@host"></textarea>
+    <button type="submit" style="margin-top:10px">创建任务</button></form>
+  </div>
+  <h3 class="sec">A1 配置体检</h3>
+  <div class="bar"><select id="a1-account"></select><button id="btn-a1">体检</button><span id="a1-result" class="muted"></span></div>
+  <div class="table-wrap"><table id="a1-table">
+    <thead><tr><th>实例</th><th>当前配置</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+  <h3 class="sec">任务列表</h3>
+  <div class="table-wrap"><table id="task-table">
+    <thead><tr><th>名称</th><th>账号</th><th>配置</th><th>状态</th><th>尝试</th><th>最近错误</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<!-- 硬盘 -->
+<section id="view-volumes" class="view">
+  <div class="bar"><select id="vol-account"></select><button id="btn-refresh-vol">刷新</button>
+    <button id="btn-newvol" class="ghost">＋ 新建块卷</button>
+    <span class="muted">引导卷只能扩容；扩容及性能调整可能产生云费用。</span></div>
+  <div id="newvol-form" class="card hide"><div class="form-grid">
+    <div><label>卷名称</label><input id="nv-name" placeholder="data-vol"></div>
+    <div><label>可用域</label><input id="nv-ad" placeholder="QgZs:AP-SINGAPORE-1-AD-1"></div>
+    <div><label>大小 GB</label><input id="nv-size" type="number" value="50"></div>
+    <div><label>VPU/GB</label><input id="nv-vpu" type="number" value="10"></div>
+  </div><button id="btn-newvol-go" style="margin-top:10px">创建</button></div>
+  <h3 class="sec">引导卷</h3>
+  <div class="table-wrap"><table id="vol-table">
+    <thead><tr><th>名称</th><th>大小GB</th><th>已用</th><th>VPU</th><th>实例</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+  <h3 class="sec">块卷</h3>
+  <div class="table-wrap"><table id="bvol-table">
+    <thead><tr><th>名称</th><th>大小GB</th><th>VPU</th><th>挂载实例</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<!-- 网络/DNS -->
+<section id="view-network" class="view">
+  <div class="card"><h3 class="sec" style="margin-top:0">OCI 实例网络操作</h3>
+    <div class="form-grid">
+      <div><label>OCI 账号</label><select id="net-account"></select></div>
+      <div><label>实例</label><select id="net-instance"></select></div>
+    </div>
+    <div class="bar" style="margin-top:10px">
+      <button id="btn-net-changeip">一键换公网IP</button>
+      <button id="btn-net-ipv6">附加 IPv6</button>
+      <span id="net-result" class="muted"></span>
+    </div></div>
+  <div class="card"><h3 class="sec" style="margin-top:0">OCI 保留 IP</h3>
+    <div class="bar"><button id="btn-rip-load">加载保留IP</button><button id="btn-rip-new" class="ghost">新建保留IP</button></div>
+    <div class="table-wrap"><table id="rip-table">
+      <thead><tr><th>IP</th><th>名称</th><th>已绑定</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><h3 class="sec" style="margin-top:0">Cloudflare DNS 管理</h3>
+    <div class="bar"><select id="cf-zone"></select><button id="btn-cf-load">加载解析</button>
+      <button id="btn-cf-add" class="ghost">＋ 添加解析</button></div>
+    <div class="table-wrap"><table id="cf-table">
+      <thead><tr><th>类型</th><th>名称</th><th>内容</th><th>代理</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+    <div id="cf-add-form" class="hide" style="margin-top:10px"><div class="form-grid">
+      <div><label>类型</label><select id="cfr-type"><option>A</option><option>AAAA</option><option>CNAME</option><option>TXT</option><option>MX</option><option>NS</option></select></div>
+      <div><label>名称</label><input id="cfr-name" placeholder="www"></div>
+      <div><label>内容</label><input id="cfr-content"></div>
+      <div><label>代理</label><select id="cfr-proxied"><option value="false">仅 DNS</option><option value="true">开启 CF 代理</option></select></div>
+    </div><button id="btn-cf-save" style="margin-top:10px">保存</button></div></div>
+</section>
+
+<!-- 用户管理 -->
+<section id="view-users" class="view">
+  <div class="bar"><select id="usr-account"></select><button id="btn-usr-load">加载用户</button>
+    <button id="btn-usr-new" class="ghost">＋ 新建用户</button></div>
+  <div id="usr-new-form" class="card hide"><div class="form-grid">
+    <div><label>用户名</label><input id="un-name"></div><div><label>邮箱</label><input id="un-email"></div>
+  </div><button id="btn-usr-create" style="margin-top:10px">创建</button></div>
+  <div class="table-wrap"><table id="usr-table">
+    <thead><tr><th>用户名</th><th>邮箱</th><th>2FA</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+  <div id="usr-keys" class="card hide"><h3 class="sec" style="margin-top:0">API 密钥 — <span id="uk-name"></span></h3>
+    <div class="table-wrap"><table id="uk-table"><thead><tr><th>指纹</th><th>添加时间</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+    <textarea id="uk-pem" rows="3" placeholder="粘贴 API 公钥 PEM 全文" style="margin-top:8px"></textarea>
+    <div class="bar" style="margin-top:8px"><button id="btn-uk-add">上传公钥</button>
+      <button id="btn-uk-smtp" class="ghost">生成 SMTP 发信凭据</button><span id="uk-result" class="muted"></span></div></div>
+</section>
+
+<!-- 对象存储 -->
+<section id="view-objects" class="view">
+  <div class="bar"><select id="os-account"></select><button id="btn-os-load">加载 Bucket</button>
+    <button id="btn-os-new" class="ghost">＋ 新建 Bucket</button><span class="muted" id="os-cur"></span></div>
+  <div class="table-wrap"><table id="os-buckets">
+    <thead><tr><th>名称</th><th>创建时间</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+  <div id="os-files" class="hide">
+    <div class="bar"><button id="btn-os-up" class="ghost">← 上一级</button>
+      <input id="os-file" type="file" style="display:none"><button id="btn-os-upload">上传文件</button>
+      <input id="os-objname" placeholder="子目录前缀，如 logs/" style="width:200px"><button id="btn-os-open">打开</button></div>
+    <div class="table-wrap"><table id="os-table">
+      <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
+</section>
+
+<!-- 域名监控 -->
+<section id="view-domains" class="view">
+  <div class="bar"><input id="dom-name" placeholder="example.com" style="width:220px">
+    <button id="btn-dom-add">添加</button>
+    <button id="btn-dom-import" class="ghost">从 Cloudflare 导入</button>
+    <button id="btn-dom-checkall" class="ghost">全部检查</button></div>
+  <div class="table-wrap"><table id="dom-table">
+    <thead><tr><th>域名</th><th>SSL 剩余</th><th>注册剩余</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+  <p class="muted" style="font-size:12px">每天自动检查，SSL/域名剩 30/14/7 天时分档提醒（通知渠道在「设置」配置）。</p>
+</section>
+
+<!-- SSH 终端 -->
+<section id="view-ssh" class="view">
+  <div class="bar"><button id="btn-ssh-new">＋ 添加会话</button>
+    <button id="btn-ssh-sync" class="ghost">从云主机同步</button>
+    <button id="btn-ssh-fwd" class="ghost">端口转发</button>
+    <button id="btn-ssh-batch" class="ghost">批量命令</button>
+    <button id="btn-ssh-monitor" class="ghost">资源监控</button></div>
+
+  <div id="ssh-session-list" class="cards"></div>
+
+  <div id="ssh-form" class="card hide"><h3 class="sec" style="margin-top:0" id="ssh-form-title">添加 SSH 会话</h3>
+    <div class="form-grid">
+      <div><label>名称</label><input id="ss-name"></div>
+      <div><label>主机</label><input id="ss-host"></div>
+      <div><label>端口</label><input id="ss-port" type="number" value="22"></div>
+      <div><label>用户名</label><input id="ss-user" value="root"></div>
+      <div><label>认证方式</label><select id="ss-authtype"><option value="password">密码</option><option value="key">私钥</option></select></div>
+      <div><label>标签</label><input id="ss-tags" placeholder="oracle,sg"></div>
+      <div><label>代理命令（可选，如 nc -x 1.2.3.4:1080 %h %p）</label><input id="ss-proxy"></div>
+    </div>
+    <label class="muted" style="font-size:12px;display:block;margin:10px 0 3px">密码 或 私钥 PEM（编辑时留空=不改）</label>
+    <textarea id="ss-secret" rows="3"></textarea>
+    <div class="bar" style="margin-top:8px">
+      <label class="chk"><input type="checkbox" id="ss-mcpu"> 监控CPU</label>
+      <label class="chk"><input type="checkbox" id="ss-mmem"> 监控内存</label>
+      <label class="chk"><input type="checkbox" id="ss-mdisk"> 监控磁盘</label>
+    </div>
+    <div class="bar" style="margin-top:10px"><button id="btn-ssh-save">保存</button>
+      <button id="btn-ssh-cancel" class="ghost">取消</button></div></div>
+
+  <div id="term-area" class="hide">
+    <div class="bar" id="term-tabs"></div>
+    <div id="term-stack"></div>
+    <div class="bar"><span class="muted">支持 Ctrl+V 粘贴截图（自动上传到 /tmp 并显示路径）</span></div>
+  </div>
+
+  <div id="ssh-batch" class="card hide"><h3 class="sec" style="margin-top:0">批量命令</h3>
+    <div id="batch-sessions" class="chips"></div>
+    <textarea id="batch-cmd" rows="2" placeholder="要同时执行的命令" style="margin-top:8px"></textarea>
+    <button id="btn-batch-run" style="margin-top:8px">执行</button>
+    <pre id="batch-out" class="logbox" style="margin-top:8px"></pre></div>
+
+  <div id="ssh-fwd-panel" class="card hide"><h3 class="sec" style="margin-top:0">端口转发</h3>
+    <div class="form-grid">
+      <div><label>会话</label><select id="fw-session"></select></div>
+      <div><label>类型</label><select id="fw-type"><option value="local">本地转发</option><option value="remote">远程转发</option></select></div>
+      <div><label>本地端口</label><input id="fw-lport" type="number" value="8080"></div>
+      <div><label>目标主机</label><input id="fw-rhost" value="127.0.0.1"></div>
+      <div><label>目标端口</label><input id="fw-rport" type="number" value="80"></div>
+    </div>
+    <button id="btn-fw-add" style="margin-top:10px">开启转发</button>
+    <div class="table-wrap" style="margin-top:10px"><table id="fw-table">
+      <thead><tr><th>会话</th><th>类型</th><th>本地端口</th><th>目标</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
+
+  <div id="ssh-monitor-panel" class="card hide"><h3 class="sec" style="margin-top:0">资源监控</h3>
+    <div class="bar"><select id="mon-session"></select><button id="btn-mon-load">采集一次</button></div>
+    <div id="mon-bars" class="chips"></div></div>
+
+  <div id="sftp-panel" class="card hide"><h3 class="sec" style="margin-top:0">SFTP 文件管理 — <span id="sftp-sess"></span></h3>
+    <div class="bar"><span id="sftp-path" class="muted"></span>
+      <input id="sftp-newname" placeholder="新目录/文件名" style="width:180px">
+      <button id="btn-sftp-mkdir" class="ghost">建目录</button></div>
+    <div class="table-wrap"><table id="sftp-table">
+      <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+    <pre id="sftp-edit" class="logbox hide" contenteditable="true"></pre>
+    <div class="bar" id="sftp-editbar" class="hide"><button id="btn-sftp-save">保存文件</button></div></div>
+</section>
+
+<!-- 邮件服务 -->
+<section id="view-mail" class="view">
+  <div class="card"><h3 class="sec" style="margin-top:0">SMTP 发信配置</h3>
+    <div class="form-grid">
+      <div><label>SMTP 服务器</label><input id="m-host" placeholder="smtp.example.com"></div>
+      <div><label>端口</label><input id="m-port" value="465"></div>
+      <div><label>SSL</label><select id="m-ssl"><option value="1">SSL</option><option value="0">STARTTLS/明文</option></select></div>
+      <div><label>用户名</label><input id="m-user"></div>
+      <div><label>密码</label><input id="m-pass" type="password"></div>
+      <div><label>发件人</label><input id="m-from" placeholder="noreply@example.com"></div>
+      <div><label>收件人（逗号分隔）</label><input id="m-to"></div>
+    </div>
+    <div class="bar" style="margin-top:10px"><button id="btn-mail-save">保存</button>
+      <button id="btn-mail-test" class="ghost">发测试邮件</button><span id="mail-result" class="muted"></span></div></div>
+  <div class="card"><h3 class="sec" style="margin-top:0">OCI Email Delivery 一键搭建发信域名</h3>
+    <div class="form-grid">
+      <div><label>OCI 账号</label><select id="mo-account"></select></div>
+      <div><label>发信域名</label><input id="mo-domain" placeholder="mail.example.com"></div>
+      <div><label>DKIM selector</label><input id="mo-selector" value="ocipanel"></div>
+      <div><label>Approved Sender（可选）</label><input id="mo-from" placeholder="noreply@example.com"></div>
+    </div>
+    <label class="chk" style="margin-top:8px"><input type="checkbox" id="mo-push"> 自动把 DKIM/SPF 记录推送到 Cloudflare</label>
+    <div class="bar" style="margin-top:10px"><button id="btn-mo-setup">一键搭建</button>
+      <button id="btn-mo-list" class="ghost">已有域名列表</button><span id="mo-result" class="muted"></span></div>
+    <div class="table-wrap" style="margin-top:10px"><table id="mo-table">
+      <thead><tr><th>域名</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
+</section>
+
+<!-- 云账号 -->
+<section id="view-accounts" class="view">
+  <div class="bar"><button id="btn-new-account">＋ 添加账号</button>
+    <span class="muted">支持 OCI / AWS / GCP / Azure / DigitalOcean / SolusVM / VirtFusion；同一租户多区域=多加几条，随意切换无限制。</span></div>
+  <div id="account-form" class="card hide">
+    <h3 class="sec" style="margin-top:0" id="a-form-title">添加账号</h3>
+    <div class="form-grid">
+      <div><label>平台</label><select id="a-platform"><option value="oci">Oracle Cloud (OCI)</option></select></div>
+      <div><label>备注名称</label><input id="a-name"></div>
+      <div><label>区域 Region</label><input id="a-region" placeholder="ap-singapore-1"></div>
+    </div>
+    <div id="a-oci" class="form-grid platform-fields">
+      <div><label>User OCID</label><input id="ao-user" placeholder="ocid1.user.oc1.."></div>
+      <div><label>Tenancy OCID</label><input id="ao-tenancy" placeholder="ocid1.tenancy.oc1.."></div>
+      <div><label>指纹 Fingerprint</label><input id="ao-fp" placeholder="b8:33:6f:..."></div>
+      <div><label>Compartment OCID（留空=租户根目录）</label><input id="ao-comp"></div>
+    </div>
+    <div style="margin-top:8px"><label class="muted" style="font-size:12px;display:block;margin-bottom:3px">OCI API 私钥 PEM 全文</label>
+      <textarea id="ao-pk" rows="5" class="platform-fields-oci"></textarea></div>
+    <div class="form-grid" style="margin-top:10px">
+      <div><label>出站代理（可选，http:// 或 socks5://）</label><input id="a-proxy" placeholder="socks5://127.0.0.1:1080"></div>
+      <div><label>流量阈值 GB/24h（0=不监控）</label><input id="a-traffic" type="number" value="0"></div>
+      <div><label>超阈值动作</label><select id="a-trafficact"><option value="notify">仅通知</option><option value="stop">自动关停实例</option></select></div>
+    </div>
+    <label class="chk" style="margin-top:8px"><input type="checkbox" id="a-auto"> 停机自动拉起（仅 OCI）</label>
+    <div style="margin-top:12px"><button id="btn-save-account">保存</button>
+      <button id="btn-cancel-account" class="ghost">取消</button></div>
+  </div>
+  <div class="table-wrap"><table id="acct-table">
+    <thead><tr><th>平台</th><th>名称</th><th>区域</th><th>自动拉起</th><th>流量阈值</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<!-- 设置 -->
+<section id="view-settings" class="view">
+  <div class="card"><h3 class="sec" style="margin-top:0">通知推送（全部可选，自己的渠道，本地管理）</h3>
+    <div class="form-grid">
+      <div><label>Bark 地址</label><input id="s-bark" placeholder="https://api.day.app/你的key"></div>
+      <div><label>Webhook 地址</label><input id="s-hook" placeholder="POST {title, content}"></div>
+    </div>
+    <h3 class="sec">邮件通知（同邮件服务的 SMTP 配置）</h3>
+    <div class="bar"><button id="btn-save-notify">保存通知</button>
+      <button id="btn-test-notify" class="ghost">测试通知</button><span id="notify-result" class="muted"></span></div></div>
+  <div class="card"><h3 class="sec" style="margin-top:0">SSH 资源告警阈值（%）</h3>
+    <div class="form-grid">
+      <div><label>CPU ≥</label><input id="al-cpu" type="number" value="95"></div>
+      <div><label>内存 ≥</label><input id="al-mem" type="number" value="95"></div>
+      <div><label>磁盘 ≥</label><input id="al-disk" type="number" value="90"></div>
+    </div><button id="btn-save-alerts" style="margin-top:10px">保存阈值</button></div>
+  <div class="card"><h3 class="sec" style="margin-top:0">MCP 接入</h3>
+    <p class="muted" style="font-size:12px">让 Claude Code / Codex / Cursor 通过面板操作你的云和服务器。端点 <code>http://面板地址/mcp</code>，Header 带 <code>Authorization: Bearer 令牌</code>。</p>
+    <div class="bar"><code id="mcp-token" style="word-break:break-all"></code>
+      <button id="btn-mcp-regen" class="ghost">重新生成令牌</button></div></div>
+  <div class="card"><h3 class="sec" style="margin-top:0">修改面板密码</h3>
+    <div class="form-grid">
+      <div><label>旧密码</label><input id="p-old" type="password"></div>
+      <div><label>新密码（≥12位）</label><input id="p-new" type="password"></div>
+    </div><button id="btn-save-pass" style="margin-top:10px">修改密码</button></div>
+</section>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/static/vendor/xterm.js"></script>
+<script src="/static/vendor/xterm-fit.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/cloud.js"></script>
+<script src="/static/webssh.js"></script>
+</body>
+</html>
