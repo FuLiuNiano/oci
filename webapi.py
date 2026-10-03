@@ -246,19 +246,10 @@ def cloud_action(platform: str, body: ActionBody, _: None = Depends(require_auth
     if platform != "oci":
         raise HTTPException(400, "此版本仅支持 Oracle Cloud")
     acct = _account_or_404(body.account_id)
-    if body.action == "TERMINATE":
-        return _wrap(oci_service.terminate_instance, acct, body.instance_id, body.preserve_boot_volume)
-    if body.action not in ("START", "SOFTSTOP", "STOP", "SOFTRESET", "RESET", "REBOOT"):
+    if body.action not in ("START", "SOFTSTOP", "STOP", "SOFTRESET", "RESET", "REBOOT", "TERMINATE"):
         raise HTTPException(400, "不支持的操作")
-    result = _wrap(oci_service.instance_action, acct, body.instance_id, body.action)
-    for prefix in ("manual_stop", "traffic_block"):
-        blocked = store.get_json_setting(f"{prefix}:{acct['id']}", []) or []
-        if body.action in ("STOP", "SOFTSTOP") and prefix == "manual_stop":
-            blocked = list(set(blocked + [body.instance_id]))
-        elif body.action == "START":
-            blocked = [i for i in blocked if i != body.instance_id]
-        store.set_json_setting(f"{prefix}:{acct['id']}", blocked)
-    return result
+    return _wrap(oci_service.manual_instance_action, acct, body.instance_id, body.action,
+                 body.preserve_boot_volume)
 
 
 class ChangeIpBody(BaseModel):
@@ -393,6 +384,24 @@ def oci_resize(body: dict, _: None = Depends(require_auth)):
                  body["ocpus"], body["memory_gbs"])
 
 
+@api.post("/oci/rename")
+def oci_rename(body: dict, _: None = Depends(require_auth)):
+    acct = _account_or_404(body["account_id"])
+    return _wrap(oci_service.rename_instance, acct, body["instance_id"], body.get("name", ""))
+
+
+@api.post("/oci/diagnostic-reboot")
+def oci_diagnostic_reboot(body: dict, _: None = Depends(require_auth)):
+    acct = _account_or_404(body["account_id"])
+    return _wrap(oci_service.diagnostic_reboot, acct, body["instance_id"])
+
+
+@api.post("/oci/reset-image")
+def oci_reset_image(body: dict, _: None = Depends(require_auth)):
+    acct = _account_or_404(body["account_id"])
+    return _wrap(oci_service.reset_instance_image, acct, body["instance_id"])
+
+
 @api.post("/oci/reinstall")
 def oci_reinstall(body: dict, _: None = Depends(require_auth)):
     acct = _account_or_404(body["account_id"])
@@ -502,9 +511,7 @@ def oci_objects(account_id: int, bucket: str, prefix: str = "",
 def oci_object_content(account_id: int, bucket: str, name: str,
                        _: None = Depends(require_auth)):
     acct = _account_or_404(account_id)
-    data = _wrap(oci_service.get_object, acct, bucket, name)
-    return {"content": data[:2_000_000].decode("utf-8", "replace"),
-            "truncated": len(data) > 2_000_000, "size": len(data)}
+    return _wrap(oci_service.get_object, acct, bucket, name)
 
 
 class PutBody(BaseModel):
@@ -569,41 +576,48 @@ def launch_task_add(body: LaunchBody, _: None = Depends(require_auth)):
         raise HTTPException(400, "请填写 SSH 公钥，以便创建后能登录")
     if body.boot_gb < 47:
         raise HTTPException(400, "引导卷不能小于 47 GB")
+    import uuid
     tid = store.execute(
         "INSERT INTO launch_tasks(account_id, display_name, shape, ocpus, memory_gbs, os_name, "
-        "os_version, boot_gb, ssh_key, subnet_id, boot_volume_id, ad_name) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        "os_version, boot_gb, ssh_key, subnet_id, boot_volume_id, ad_name, retry_token) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (body.account_id, body.display_name.strip() or "auto-boot", body.shape.strip(),
          body.ocpus, body.memory_gbs, body.os_name.strip(), body.os_version.strip(),
          body.boot_gb, body.ssh_key.strip(), body.subnet_id.strip(),
-         body.boot_volume_id.strip(), body.ad_name.strip()),
+         body.boot_volume_id.strip(), body.ad_name.strip(), str(uuid.uuid4())),
     )
-    import uuid
-    store.execute("UPDATE launch_tasks SET retry_token=? WHERE id=?", (str(uuid.uuid4()), tid))
     return {"id": tid}
 
 
 @api.post("/launch-tasks/{task_id}/{op}")
 def launch_task_op(task_id: int, op: str, _: None = Depends(require_auth)):
-    if not store.query("SELECT id FROM launch_tasks WHERE id=?", (task_id,)):
-        raise HTTPException(404, "任务不存在")
-    row = store.query("SELECT * FROM launch_tasks WHERE id=?", (task_id,))[0]
-    if op == "start" and row["status"] == "success":
-        raise HTTPException(400, "此任务已创建实例，请新建任务以创建另一台")
-    if op == "stop":
-        store.execute("UPDATE launch_tasks SET status='stopped', "
-                      "updated_at=datetime('now','localtime') WHERE id=?", (task_id,))
-    elif op == "start":
-        if row["status"] == "failed":
-            import uuid
-            store.execute("UPDATE launch_tasks SET retry_token=? WHERE id=?", (str(uuid.uuid4()), task_id))
-        store.execute("UPDATE launch_tasks SET status='running', last_error='', "
-                      "updated_at=datetime('now','localtime') WHERE id=?", (task_id,))
-    elif op == "delete":
-        store.execute("DELETE FROM launch_tasks WHERE id=?", (task_id,))
-    else:
-        raise HTTPException(400, "不支持的操作")
-    return {"ok": True}
+    import tasks
+    lock = tasks.launch_lock(task_id)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, "任务正在向 OCI 提交，请等待本次结果后再操作；已提交的请求不能撤回")
+    try:
+        if not store.query("SELECT id FROM launch_tasks WHERE id=?", (task_id,)):
+            raise HTTPException(404, "任务不存在")
+        row = store.query("SELECT * FROM launch_tasks WHERE id=?", (task_id,))[0]
+        if op in ("start", "stop") and row["status"] == "success":
+            raise HTTPException(400, "此任务已创建实例，请新建任务以创建另一台")
+        if op == "stop":
+            store.execute("UPDATE launch_tasks SET status='stopped', "
+                          "updated_at=datetime('now','localtime') WHERE id=?", (task_id,))
+        elif op == "start":
+            if row["status"] == "failed":
+                import uuid
+                store.execute("UPDATE launch_tasks SET retry_token=? WHERE id=?", (str(uuid.uuid4()), task_id))
+            store.execute("UPDATE launch_tasks SET status='running', last_error='', "
+                          "updated_at=datetime('now','localtime') WHERE id=?", (task_id,))
+        elif op == "delete":
+            store.execute("DELETE FROM launch_tasks WHERE id=?", (task_id,))
+        else:
+            raise HTTPException(400, "不支持的操作")
+        return {"ok": True}
+    finally:
+        lock.release()
+
 
 
 # ================= Cloudflare DNS =================
@@ -612,21 +626,35 @@ class CfBody(BaseModel):
     api_token: str = ""
     email: str = ""
     global_key: str = ""
+    clear_token: bool = False
+    clear_global_key: bool = False
 
 
 @api.get("/cf/settings")
 def cf_get(_: None = Depends(require_auth)):
     p = store.get_json_setting("cf_params", {}) or {}
-    return {"api_token": p.get("cf_api_token", ""), "email": p.get("cf_email", ""),
+    return {"has_token": bool(p.get("cf_api_token")), "email": p.get("cf_email", ""),
             "has_key": bool(p.get("cf_account_key"))}
 
 
 @api.post("/cf/settings")
 def cf_set(body: CfBody, _: None = Depends(require_auth)):
-    params = {"cf_api_token": body.api_token.strip()}
-    if body.global_key.strip():
+    if (body.clear_token and body.api_token.strip()) or (body.clear_global_key and body.global_key.strip()):
+        raise HTTPException(400, "不能同时填写和删除同一种凭据")
+    params = store.get_json_setting("cf_params", {}) or {}
+    if body.clear_token:
+        params.pop("cf_api_token", None)
+    elif body.api_token.strip():
+        params["cf_api_token"] = body.api_token.strip()
+    if body.email.strip():
         params["cf_email"] = body.email.strip()
+    if body.clear_global_key:
+        params.pop("cf_account_key", None)
+        params.pop("cf_email", None)
+    elif body.global_key.strip():
         params["cf_account_key"] = body.global_key.strip()
+    if params.get("cf_account_key") and not params.get("cf_email"):
+        raise HTTPException(400, "Global Key 需要填写账号邮箱")
     store.set_json_setting("cf_params", params)
     return {"ok": True}
 
@@ -1020,15 +1048,15 @@ class PasswordBody(BaseModel):
 
 @api.post("/settings/password")
 def password_change(body: PasswordBody, _: None = Depends(require_auth)):
-    from deps import hash_pw
-    if hash_pw(body.old_password) != (store.get_setting("admin_pass") or ""):
+    from deps import hash_pw, verify_pw
+    if not verify_pw(body.old_password, store.get_setting("admin_pass") or ""):
         raise HTTPException(400, "旧密码不对")
-    if len(body.new_password) < 12:
-        raise HTTPException(400, "新密码至少 12 位")
+    if len(body.new_password) < 32:
+        raise HTTPException(400, "新密码至少 32 位")
     store.set_setting("admin_pass", hash_pw(body.new_password))
     import secrets
     store.set_setting("secret", secrets.token_hex(32))
-    initial = os.path.join(store.DATA_DIR, "initial_admin_password.txt")
+    initial = os.path.join(store.DATA_DIR, "initial_admin_credentials.txt")
     if os.path.exists(initial):
         os.remove(initial)
     return {"ok": True}

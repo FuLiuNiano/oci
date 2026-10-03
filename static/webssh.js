@@ -111,6 +111,18 @@
   }
   window.loadSessions = loadSessions;
 
+  window.openCloudInstanceSsh = async function (host) {
+    switchView("ssh");
+    await loadSessions();
+    const sess = state.sessions.find(s => s.host === host);
+    if (sess) openTerminal(sess.id);
+    else {
+      $("#session-search").value = host;
+      renderSessionCards();
+      toast("还没有这台机器的 SSH 会话，请从云主机同步并填写登录凭据", false);
+    }
+  };
+
   window.syncSshSessionSelects = function () {
     const opts = state.sessions.map(s =>
       `<option value="${s.id}">${esc(s.name)}（${esc(s.host)}）</option>`).join("");
@@ -298,7 +310,7 @@
     fit.fit();
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws/ssh?sid=${sid}&cols=${term.cols}&rows=${term.rows}`);
+    const ws = new WebSocket(`${proto}://${location.host}${panelPath(`/ws/ssh?sid=${sid}&cols=${term.cols}&rows=${term.rows}`)}`);
     ws.onopen = () => {
       fit.fit(); term.focus();
       ws.send(JSON.stringify({resize: {cols: term.cols, rows: term.rows}}));
@@ -447,7 +459,7 @@
   async function downloadFile(name) {
     try {
       const full = sftpPath.replace(/\/$/, "") + "/" + name;
-      const r = await fetch(`/api/ssh/sftp/download?session_id=${sftpSid}&path=${encodeURIComponent(full)}`);
+      const r = await fetch(panelPath(`/api/ssh/sftp/download?session_id=${sftpSid}&path=${encodeURIComponent(full)}`));
       if (!r.ok) { const data = await r.json(); throw new Error(data.detail || "下载失败"); }
       const blob = await r.blob();
       const a = document.createElement("a");
@@ -479,7 +491,7 @@
         if (file.size > 100_000_000) throw new Error(`${file.name} 超过 100 MB 上传限制`);
         const path = directory.replace(/\/$/, "") + "/" + file.name;
         button.textContent = `上传中：${file.name}`;
-        const response = await fetch(`/api/ssh/sftp/upload?session_id=${sid}&path=${encodeURIComponent(path)}`,
+        const response = await fetch(panelPath(`/api/ssh/sftp/upload?session_id=${sid}&path=${encodeURIComponent(path)}`),
           {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: file});
         let result = {};
         try { result = await response.json(); } catch {}

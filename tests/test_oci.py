@@ -81,6 +81,33 @@ def test_reboot_and_resize(sdk, account):
     assert isinstance(details.shape_config, oci.core.models.UpdateInstanceShapeConfigDetails)
 
 
+def test_instance_rename_diagnostic_reboot_and_image_reset(sdk, account):
+    data, calls = sdk
+    data["update_instance"] = instance()
+    data["instance_action"] = instance()
+    data["get_instance"] = instance()
+    assert service.rename_instance(account, "instance1", "renamed")["name"] == "renamed"
+    rename = next(c[2]["body"] for c in calls if c[0] == "update_instance")
+    assert rename.display_name == "renamed"
+    assert service.diagnostic_reboot(account, "instance1")["ok"]
+    assert any(c[0] == "instance_action" and c[2]["query_params"]["action"] == "DIAGNOSTICREBOOT"
+               for c in calls)
+    assert service.reset_instance_image(account, "instance1")["ok"]
+    reset = [c[2]["body"] for c in calls if c[0] == "update_instance"][-1]
+    assert reset.source_details.image_id == "image1"
+    assert reset.source_details.is_preserve_boot_volume_enabled is True
+
+
+def test_image_reset_rejects_boot_volume_source(sdk, account):
+    data, calls = sdk
+    ins = instance()
+    ins.source_details = oci.core.models.InstanceSourceViaBootVolumeDetails(boot_volume_id="boot1")
+    data["get_instance"] = ins
+    with pytest.raises(service.OciError, match="不是从镜像创建"):
+        service.reset_instance_image(account, "instance1")
+    assert not any(c[0] == "update_instance" for c in calls)
+
+
 def test_rebuild_never_deletes_original(sdk, account):
     data, calls = sdk
     data["get_instance"] = instance()
@@ -176,7 +203,9 @@ def test_boot_volume_attachment_signature(sdk, account):
     data["list_boot_volume_attachments"] = [oci.core.models.BootVolumeAttachment(boot_volume_id="boot1",instance_id="instance1",lifecycle_state="ATTACHED")]
     data["get_instance"] = instance()
     data["list_boot_volumes"] = [oci.core.models.BootVolume(id="boot1",display_name="disk",size_in_gbs=50)]
-    assert service.list_boot_volumes(account)[0]["instance"] == "machine"
+    boot = service.list_boot_volumes(account)[0]
+    assert boot["instance"] == "machine"
+    assert boot["instance_id"] == "instance1"
 
 
 def test_console_capture_sdk_signature(sdk, account):

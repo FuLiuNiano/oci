@@ -6,7 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
-ENV PORT=9528 PYTHONUNBUFFERED=1
+ENV HOST=0.0.0.0 PORT=9528 PYTHONUNBUFFERED=1
 EXPOSE 9528
 VOLUME ["/app/data"]
 

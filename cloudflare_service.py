@@ -31,8 +31,8 @@ def _call(method, path, acct, params=None, json=None):
 
 
 def test(params):
-    j = _call("GET", "/user/tokens/verify", params)
-    return j.get("result", {})
+    # DNS management requires zone access; this works with either credential type.
+    return {"ok": True, "zones": len(list_zones(params))}
 
 
 def list_zones(params):

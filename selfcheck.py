@@ -43,8 +43,10 @@ def http_smoke():
         jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                                              urllib.request.HTTPCookieProcessor(jar))
+        prefix = ""
         def request(path, body=None):
-            req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None,
+            target = path if path == "/healthz" else prefix + path
+            req = urllib.request.Request(base + target, data=json.dumps(body).encode() if body is not None else None,
                 headers={"Content-Type":"application/json"} if body is not None else {})
             try:
                 with opener.open(req, timeout=10) as response:
@@ -68,19 +70,23 @@ def http_smoke():
                     else:
                         raise RuntimeError("Panel startup timed out")
                     if run == 0:
-                        password = (Path(directory) / "initial_admin_password.txt").read_text().strip()
+                        details = (Path(directory) / "initial_admin_credentials.txt").read_text(encoding="utf-8").splitlines()
+                        prefix = details[0].split(": ", 1)[1].rstrip("/")
+                        username = details[1].split(": ", 1)[1]
+                        password = details[2].split(": ", 1)[1]
                         assert request("/api/me")[0] == 401
-                        assert request("/api/login", {"password":"wrong"})[0] == 401
-                        assert request("/api/login", {"password":password})[0] == 200
+                        assert request("/api/login", {"username": username, "password":"wrong"})[0] == 401
+                        assert request("/api/login", {"username": username, "password":password})[0] == 200
                         for path in ("/api/me", "/", "/static/app.js", "/static/cloud.js", "/static/webssh.js",
                                      "/api/accounts", "/api/overview", "/api/launch-tasks", "/api/ssh/sessions"):
                             assert request(path)[0] == 200, path
                         assert request("/api/settings/password", {"old_password":password,
-                                    "new_password":"selfcheck-new-password"})[0] == 200
+                                    "new_password":"selfcheck-new-password-32-characters"})[0] == 200
                         assert request("/api/me")[0] == 401
                     else:
-                        assert request("/api/login", {"password":password})[0] == 401
-                        assert request("/api/login", {"password":"selfcheck-new-password"})[0] == 200
+                        assert request("/api/login", {"username":username, "password":password})[0] == 401
+                        assert request("/api/login", {"username":username,
+                                    "password":"selfcheck-new-password-32-characters"})[0] == 200
                         assert request("/api/me")[0] == 200
                         assert request("/api/logout", {})[0] == 200
                         assert request("/api/me")[0] == 401

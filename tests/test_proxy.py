@@ -82,6 +82,15 @@ def test_removing_account_proxy_requires_explicit_confirmation(client, credentia
 
 @pytest.fixture
 def socks_proxy():
+    yield from _socks_proxy()
+
+
+@pytest.fixture
+def second_socks_proxy():
+    yield from _socks_proxy()
+
+
+def _socks_proxy():
     destinations = []
     connections = []
     async def serve(reader, writer):
@@ -261,6 +270,122 @@ def test_two_oci_accounts_keep_routes_separate(account, socks_proxy, monkeypatch
     finally:
         direct.close()
         proxied.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(3)
+
+
+def test_two_oci_accounts_use_different_proxies_concurrently(account, socks_proxy, second_socks_proxy, monkeypatch, tmp_path):
+    import copy
+    import ssl
+    from datetime import datetime, timedelta, timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    proxy_a, destinations_a, connections_a = socks_proxy
+    proxy_b, destinations_b, _ = second_socks_proxy
+    first = copy.deepcopy(account)
+    second = copy.deepcopy(account)
+    first['params']['proxy_url'] = proxy_a
+    second['params']['proxy_url'] = proxy_b
+    second['params']['user_ocid'] = 'ocid1.user.oc1..' + 'c' * 60
+    second['params']['fingerprint'] = ':'.join(['11'] * 16)
+    second['params']['private_key'] = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+    second['name'] = 'second-proxy-account'
+    aid = store.execute('INSERT INTO accounts(name,region,params) VALUES(?,?,?)',
+        (second['name'], second['region'], json.dumps(second['params'])))
+    second = store.query('SELECT * FROM accounts WHERE id=?', (aid,))[0]
+    store.execute('UPDATE accounts SET params=? WHERE id=?', (json.dumps(first['params']), first['id']))
+    first = store.query('SELECT * FROM accounts WHERE id=?', (first['id'],))[0]
+    monkeypatch.setenv('HTTP_PROXY', 'http://127.0.0.1:1')
+    monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:1')
+    monkeypatch.setenv('ALL_PROXY', 'socks5h://127.0.0.1:1')
+    monkeypatch.setenv('NO_PROXY', '*')
+    requests_seen = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests_seen.append((self.headers['Host'], self.headers.get('Authorization', ''), self.path))
+            if self.path.endswith('/redirect'):
+                self.send_response(302)
+                self.send_header('Location', 'https://redirect-' + self.headers['Host'] + '/final')
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(b'[]')
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    key = serialization.load_pem_private_key(account['params']['private_key'].encode(), password=None)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'local-test')])
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(days=1)).add_extension(x509.SubjectAlternativeName([
+                x509.DNSName(name) for name in ('account-a.example.invalid', 'account-b.example.invalid',
+                    'redirect-account-a.example.invalid', 'redirect-account-b.example.invalid')]), critical=False)
+            .sign(key, hashes.SHA256()))
+    cert_path, key_path = tmp_path / 'proxy-test-cert.pem', tmp_path / 'proxy-test-key.pem'
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_text(account['params']['private_key'])
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(str(cert_path), str(key_path))
+    server.socket = tls.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    ca = oci_service._client(oci.identity.IdentityClient, first)
+    cb = oci_service._client(oci.identity.IdentityClient, second)
+    ca.base_client.endpoint = f'https://account-a.example.invalid:{server.server_port}'
+    cb.base_client.endpoint = f'https://account-b.example.invalid:{server.server_port}'
+    ca.base_client.session.verify = cb.base_client.session.verify = str(cert_path)
+    try:
+        assert ca.base_client.session is not cb.base_client.session
+        assert ca.base_client.signer is not cb.base_client.signer
+        def query(client):
+            for _ in range(3):
+                assert client.list_regions().data == []
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a, b = pool.submit(query, ca), pool.submit(query, cb)
+            a.result(timeout=10)
+            b.result(timeout=10)
+        assert destinations_a == [('account-a.example.invalid', server.server_port)] * 3
+        assert destinations_b == [('account-b.example.invalid', server.server_port)] * 3
+        for host, auth, _ in requests_seen:
+            expected = first if host.startswith('account-a.') else second
+            other = second if expected is first else first
+            assert expected['params']['user_ocid'] in auth
+            assert expected['params']['fingerprint'] in auth
+            assert other['params']['user_ocid'] not in auth
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(ca.base_client.session.get, ca.base_client.endpoint + '/redirect', timeout=3)
+            b = pool.submit(cb.base_client.session.get, cb.base_client.endpoint + '/redirect', timeout=3)
+            assert a.result().status_code == b.result().status_code == 200
+        assert destinations_a[-2:] == [('account-a.example.invalid', server.server_port),
+                                       ('redirect-account-a.example.invalid', server.server_port)]
+        assert destinations_b[-2:] == [('account-b.example.invalid', server.server_port),
+                                       ('redirect-account-b.example.invalid', server.server_port)]
+        # Failure of account A's newly saved proxy must not reach the direct target,
+        # change account B's route, or mutate the already-created account A session.
+        with socket.socket() as unavailable:
+            unavailable.bind(('127.0.0.1', 0))
+            first['params']['proxy_url'] = f'socks5h://127.0.0.1:{unavailable.getsockname()[1]}'
+            failed = oci_service._client(oci.identity.IdentityClient, first).base_client.session
+            try:
+                with pytest.raises(oci_service.OciTransportError):
+                    failed.get(f'http://127.0.0.1:{server.server_port}/must-not-arrive', timeout=2)
+                assert cb.list_regions().data == []
+                assert ca.list_regions().data == []
+                assert destinations_b[-1] == ('account-b.example.invalid', server.server_port)
+                assert destinations_a[-1] == ('account-a.example.invalid', server.server_port)
+                assert all(path != '/must-not-arrive' for _, _, path in requests_seen)
+            finally:
+                failed.close()
+    finally:
+        ca.base_client.session.close()
+        cb.base_client.session.close()
         server.shutdown()
         server.server_close()
         thread.join(3)

@@ -33,7 +33,7 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable --now oci-panel
-  echo "已安装 systemd 服务并启动，访问 http://你的IP:9528"
+  echo "已安装 systemd 服务并启动。登录入口和账号请查看 $APP_DIR/data/initial_admin_credentials.txt"
 }
 
 case "${1:-start}" in
@@ -48,7 +48,7 @@ case "${1:-start}" in
       cd "$APP_DIR"
       nohup "$VENV/bin/python" main.py > panel.log 2>&1 &
       echo $! > panel.pid
-      echo "已后台启动 pid=$(cat panel.pid)，日志: panel.log，访问 http://你的IP:9528"
+      echo "已后台启动 pid=$(cat panel.pid)，日志: panel.log。登录入口和账号请查看 $APP_DIR/data/initial_admin_credentials.txt"
     fi
     ;;
   stop)

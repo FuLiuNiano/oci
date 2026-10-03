@@ -6,6 +6,7 @@ import pytest
 import store
 import tasks
 import oci_service
+import deps
 
 
 def test_login_logout_password_revokes_old_cookie(client):
@@ -13,10 +14,11 @@ def test_login_logout_password_revokes_old_cookie(client):
     cookie = client.cookies.get(main.COOKIE)
     assert client.get("/api/me").status_code == 200
     assert client.post("/api/settings/password", json={"old_password": client.initial_password,
-                                                    "new_password":"new-password-123"}).status_code == 200
+                                                    "new_password":"n" * 32}).status_code == 200
     assert client.get("/api/me").status_code == 401
     assert not main.deps.check_token(cookie)
-    assert client.post("/api/login", json={"password":"new-password-123"}).status_code == 200
+    assert client.post("/api/login", json={"username": client.initial_username,
+                                          "password":"n" * 32}).status_code == 200
     assert client.post("/api/logout").status_code == 200
     assert client.get("/api/accounts").status_code == 401
 
@@ -24,8 +26,62 @@ def test_login_logout_password_revokes_old_cookie(client):
 def test_login_rate_limit(client):
     client.post("/api/logout")
     for _ in range(10):
-        assert client.post("/api/login", json={"password":"wrong"}).status_code == 401
-    assert client.post("/api/login", json={"password":"wrong"}).status_code == 429
+        assert client.post("/api/login", json={"username": client.initial_username,
+                                              "password":"wrong"}).status_code == 401
+    assert client.post("/api/login", json={"username": client.initial_username,
+                                          "password":"wrong"}).status_code == 429
+
+
+def test_secret_entry_guards_page_api_static_and_websocket(client):
+    import main
+    from fastapi.testclient import TestClient
+    assert len(client.prefix.removeprefix("/")) == 32
+    assert len(client.initial_username) == 32
+    assert len(client.initial_password) == 32
+    assert client.get("/").status_code == 200
+    assert client.get("/static/app.js").status_code == 200
+    with TestClient(main.app) as raw:
+        assert raw.get("/").status_code == 404
+        assert raw.get("/api/me").status_code == 404
+        assert raw.get("/static/app.js").status_code == 404
+        assert raw.get("/healthz").status_code == 200
+        assert raw.get(client.prefix, follow_redirects=False).status_code == 308
+        assert raw.get(client.prefix + "/").status_code == 200
+        with pytest.raises(Exception):
+            with raw.websocket_connect("/ws/ssh?sid=1"):
+                pass
+
+
+def test_login_requires_username_and_cookie_is_scoped(client):
+    import main
+    client.post("/api/logout")
+    assert client.post("/api/login", json={"username": "wrong", "password": client.initial_password}).status_code == 401
+    result = client.post("/api/login", json={"username": client.initial_username,
+                                              "password": client.initial_password})
+    assert result.status_code == 200
+    cookie = result.headers["set-cookie"]
+    assert f"Path={client.prefix}/" in cookie
+    assert "HttpOnly" in cookie and "SameSite=strict" in cookie
+    assert client.get("/api/me").status_code == 200
+    assert client.post("/api/logout", headers={"Origin": "https://untrusted.example"}).status_code == 403
+    assert client.post("/api/login", headers={"Origin": "https://untrusted.example"}, json={
+        "username": client.initial_username, "password": client.initial_password}).status_code == 403
+
+
+def test_old_password_install_rotates_login_without_touching_cloud_data(database):
+    store.set_setting("admin_pass", "legacy-hash")
+    store.set_setting("secret", "old-session-secret")
+    old = database / "initial_admin_password.txt"
+    old.write_text("obsolete", encoding="utf-8")
+    store.execute("INSERT INTO accounts(name, region, params) VALUES(?,?,?)",
+                  ("saved", "us-phoenix-1", "{}"))
+    deps.init_auth()
+    assert not old.exists()
+    assert (database / "initial_admin_credentials.txt").exists()
+    assert len(store.get_setting("admin_user")) == 32
+    assert len(store.get_setting("access_path")) == 32
+    assert store.get_setting("secret") != "old-session-secret"
+    assert store.query("SELECT name FROM accounts")[0]["name"] == "saved"
 
 
 def test_account_add_edit_copy_keeps_credentials(client, credentials):

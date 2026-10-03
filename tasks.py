@@ -20,6 +20,13 @@ _state = {"last_traffic": 0, "last_domain": 0, "last_alert": 0}
 _started = False
 _stop_event = threading.Event()
 _worker = None
+_launch_locks = {}
+_launch_locks_guard = threading.Lock()
+
+
+def launch_lock(task_id):
+    with _launch_locks_guard:
+        return _launch_locks.setdefault(task_id, threading.RLock())
 
 
 def start():
@@ -76,48 +83,55 @@ def _loop():
 
 def _tick_launch_tasks():
     for task in store.query("SELECT * FROM launch_tasks WHERE status='running'"):
-        rows = store.query("SELECT * FROM accounts WHERE id=?", (task["account_id"],))
-        if not rows:
-            store.execute(
-                "UPDATE launch_tasks SET status='failed', last_error='账号已删除', "
-                "updated_at=datetime('now','localtime') WHERE id=?",
-                (task["id"],),
-            )
-            continue
-        acct = rows[0]
-        if acct["platform"] != "oci":
-            store.execute(
-                "UPDATE launch_tasks SET status='failed', last_error='抢机仅支持 OCI 账号', "
-                "updated_at=datetime('now','localtime') WHERE id=?",
-                (task["id"],),
-            )
-            continue
-        try:
-            instance_id, _ad = oci_service.launch_once(acct, task)
-        except oci_service.OciError as e:
-            _fail_task(task["id"], str(e))
-            notify.send("开机任务失败", f"{task['display_name']}：{e}")
-        except ServiceError as e:
-            err = f"OCI {e.status} {e.code or ''}: {(e.message or '')[:200]}"
-            if oci_service.is_transient(e):
-                _retry_task(task["id"], err)
-            else:
-                _fail_task(task["id"], err)
-                notify.send("开机任务失败", f"{task['display_name']}：{err}")
-        except Exception as e:
-            record = _retry_task if oci_service.is_transient(e) else _fail_task
-            record(task["id"], f"{e.__class__.__name__}: {str(e)[:200]}")
+        with launch_lock(task["id"]):
+            current = store.query("SELECT * FROM launch_tasks WHERE id=? AND status='running'", (task["id"],))
+            if current:
+                _run_launch_task(current[0])
+
+
+def _run_launch_task(task):
+    rows = store.query("SELECT * FROM accounts WHERE id=?", (task["account_id"],))
+    if not rows:
+        store.execute(
+            "UPDATE launch_tasks SET status='failed', last_error='账号已删除', "
+            "updated_at=datetime('now','localtime') WHERE id=?",
+            (task["id"],),
+        )
+        return
+    acct = rows[0]
+    if acct["platform"] != "oci":
+        store.execute(
+            "UPDATE launch_tasks SET status='failed', last_error='抢机仅支持 OCI 账号', "
+            "updated_at=datetime('now','localtime') WHERE id=?",
+            (task["id"],),
+        )
+        return
+    try:
+        instance_id, _ad = oci_service.launch_once(acct, task)
+    except oci_service.OciError as e:
+        _fail_task(task["id"], str(e))
+        notify.send("开机任务失败", f"{task['display_name']}：{e}")
+    except ServiceError as e:
+        err = f"OCI {e.status} {e.code or ''}: {(e.message or '')[:200]}"
+        if oci_service.is_transient(e):
+            _retry_task(task["id"], err)
         else:
-            store.execute(
-                "UPDATE launch_tasks SET status='success', instance_id=?, attempts=attempts+1, "
-                "last_error='', updated_at=datetime('now','localtime') WHERE id=?",
-                (instance_id, task["id"]),
-            )
-            threading.Thread(
-                target=_wait_ip_and_notify,
-                args=(dict(acct), task["display_name"], instance_id),
-                daemon=True,
-            ).start()
+            _fail_task(task["id"], err)
+            notify.send("开机任务失败", f"{task['display_name']}：{err}")
+    except Exception as e:
+        record = _retry_task if oci_service.is_transient(e) else _fail_task
+        record(task["id"], f"{e.__class__.__name__}: {str(e)[:200]}")
+    else:
+        store.execute(
+            "UPDATE launch_tasks SET status='success', instance_id=?, attempts=attempts+1, "
+            "last_error='', updated_at=datetime('now','localtime') WHERE id=?",
+            (instance_id, task["id"]),
+        )
+        threading.Thread(
+            target=_wait_ip_and_notify,
+            args=(dict(acct), task["display_name"], instance_id),
+            daemon=True,
+        ).start()
 
 
 def _fail_task(task_id, err):

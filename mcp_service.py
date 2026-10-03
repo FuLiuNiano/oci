@@ -87,21 +87,12 @@ def _dispatch(name, args):
             raise ValueError("账号不存在")
         acct = rows[0]
         action = args["action"]
-        platform = acct["platform"]
-        if action == "TERMINATE":
-            action = "TERMINATE"
-        mapping = {"START": "START", "STOP": "STOP", "REBOOT": "REBOOT", "TERMINATE": "TERMINATE"}
-        if platform == "oci":
-            import oci_service
-            real = {"START": "START", "STOP": "SOFTSTOP", "REBOOT": "SOFTRESET",
-                    "TERMINATE": None}[action]
-            if real is None:
-                oci_service.terminate_instance(acct, args["instance_id"])
-                return {"ok": True}
-            oci_service.instance_action(acct, args["instance_id"], real)
-            return {"ok": True}
-        raise ValueError("仅支持 Oracle Cloud")
-        return {"ok": True}
+        import oci_service
+        if action not in ("START", "STOP", "REBOOT", "TERMINATE"):
+            raise ValueError("不支持的电源操作")
+        real = {"STOP": "SOFTSTOP", "REBOOT": "SOFTRESET"}.get(action, action)
+        return oci_service.manual_instance_action(acct, args["instance_id"], real)
+
 
     if name == "list_ssh_sessions":
         rows = store.query("SELECT id, name, host, port, username, tags FROM ssh_sessions ORDER BY id")

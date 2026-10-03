@@ -216,8 +216,26 @@ def list_instances(acct):
             "subnet_id": subnet,
             "ad": ins.availability_domain,
             "created": str(ins.time_created or ""),
+            "can_reset_image": getattr(ins.source_details, "source_type", None) == "image"
+                               and bool(getattr(ins.source_details, "image_id", None)),
         })
     return out
+
+
+def manual_instance_action(acct, instance_id, action, preserve_boot_volume=False):
+    """Shared UI/MCP power actions and persistent automatic-restart exclusions."""
+    if action == "TERMINATE":
+        return terminate_instance(acct, instance_id, preserve_boot_volume)
+    result = instance_action(acct, instance_id, action)
+    for prefix in ("manual_stop", "traffic_block"):
+        key = f"{prefix}:{acct['id']}"
+        blocked = store.get_json_setting(key, []) or []
+        if action in ("STOP", "SOFTSTOP") and prefix == "manual_stop":
+            blocked = list(set(blocked + [instance_id]))
+        elif action == "START":
+            blocked = [i for i in blocked if i != instance_id]
+        store.set_json_setting(key, blocked)
+    return result
 
 
 def instance_action(acct, instance_id, action):
@@ -245,6 +263,36 @@ def resize_instance(acct, instance_id, ocpus, memory_gbs):
     )
     _client(oci.core.ComputeClient, acct).update_instance(instance_id, details)
     return {"ok": True}
+
+
+def rename_instance(acct, instance_id, name):
+    name = (name or "").strip()
+    if not name or len(name) > 255:
+        raise OciError("实例名称不能为空且不能超过 255 个字符")
+    _client(oci.core.ComputeClient, acct).update_instance(
+        instance_id, oci.core.models.UpdateInstanceDetails(display_name=name))
+    return {"ok": True, "name": name}
+
+
+def diagnostic_reboot(acct, instance_id):
+    """OCI diagnostic reboot: a last-resort host rebuild, not an OS repair."""
+    _client(oci.core.ComputeClient, acct).instance_action(instance_id, "DIAGNOSTICREBOOT")
+    return {"ok": True}
+
+
+def reset_instance_image(acct, instance_id):
+    """Replace the boot volume with the original image, preserving the old volume."""
+    compute = _client(oci.core.ComputeClient, acct)
+    ins = compute.get_instance(instance_id).data
+    source = ins.source_details
+    image_id = getattr(source, "image_id", None) if getattr(source, "source_type", None) == "image" else None
+    if not image_id:
+        raise OciError("此实例不是从镜像创建，无法按原镜像重置")
+    details = oci.core.models.UpdateInstanceDetails(
+        source_details=oci.core.models.UpdateInstanceSourceViaImageDetails(
+            image_id=image_id, is_preserve_boot_volume_enabled=True))
+    compute.update_instance(instance_id, details)
+    return {"ok": True, "message": "已提交镜像重置；旧启动盘会保留，请到硬盘页核对"}
 
 
 def reinstall_instance(acct, instance_id):
@@ -494,6 +542,7 @@ def list_boot_volumes(acct):
                 "id": bv.id, "kind": "boot", "name": bv.display_name,
                 "size_gbs": bv.size_in_gbs, "vpus": bv.vpus_per_gb,
                 "state": bv.lifecycle_state, "ad": ad,
+                "instance_id": attach.get(bv.id, ""),
                 "instance": names.get(attach.get(bv.id, ""), ""),
                 "size_used_gbs": None,
             })
@@ -836,10 +885,35 @@ def list_objects(acct, bucket, prefix=""):
     } for o in objects], "prefixes": sorted(prefixes)}
 
 
-def get_object(acct, bucket, name):
+def get_object(acct, bucket, name, max_bytes=2_000_000):
     osv = _client(oci.object_storage.ObjectStorageClient, acct)
-    ns = osv.get_namespace().data
-    return osv.get_object(ns, bucket, name).data.content
+    response = None
+    try:
+        ns = osv.get_namespace().data
+        try:
+            response = osv.get_object(ns, bucket, name, range=f"bytes=0-{max_bytes}")
+        except ServiceError as error:
+            if error.status != 416:
+                raise
+            head = osv.head_object(ns, bucket, name)
+            if str(head.headers.get("Content-Length", head.headers.get("content-length"))) != "0":
+                raise
+            return {"content": "", "truncated": False, "size": 0}
+        # Bound the read even when an upstream ignores Range. Never access .content.
+        data = response.data.raw.read(max_bytes + 1)
+        content_range = response.headers.get("Content-Range", response.headers.get("content-range", ""))
+        total = content_range.rsplit("/", 1)[-1]
+        size = int(total) if total.isdigit() else None
+        if size is None and response.status == 200:
+            length = response.headers.get("Content-Length", response.headers.get("content-length", ""))
+            size = int(length) if str(length).isdigit() else None
+        return {"content": data[:max_bytes].decode("utf-8", "replace"),
+                "truncated": len(data) > max_bytes or (size is not None and size > max_bytes),
+                "size": size if size is not None else len(data)}
+    finally:
+        if response is not None:
+            response.data.close()
+        osv.base_client.session.close()
 
 
 def put_object(acct, bucket, name, content: bytes):

@@ -97,3 +97,21 @@ td{border-bottom:1px solid var(--muted)}
 @media(max-width:900px){header{height:auto;min-height:76px;padding:14px 18px}.view{margin-left:0;padding:24px 18px}.host-metrics{order:3;width:100%;justify-content:space-around}nav{position:static;width:100%;border-right:0;border-bottom:3px solid #000;flex-flow:row nowrap;padding:12px 14px;gap:10px}nav button{min-height:38px;padding:7px 10px}.page-heading{padding:20px;min-height:130px}}
 @media(max-width:600px){.view{padding:20px 14px 46px;gap:20px}.session-grid,.cloud-summary-grid{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.summary-card,.session-card{grid-column:1/-1}.page-heading{flex-wrap:wrap;gap:12px;padding:18px}.page-heading h1{font-size:28px}.page-heading::after{width:42%}.brand{font-size:19px}.brand-mark{font-size:18px}.host-metrics{padding:8px 9px;gap:5px}.host-metrics b{font-size:9px}.host-metrics small{font-size:9px}.session-title h3{font-size:17px}.terminal-actions{flex-wrap:wrap}.terminal-header{gap:7px;padding:10px}.terminal-toolbar{padding:8px 10px}.terminal-hint{font-size:10px}.login-card{padding:22px}.login-card h2{font-size:28px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}.session-card:hover,.summary-card:hover,.view>.card:hover,.view>.table-wrap:hover,.stat:hover{transform:none!important}}
+/* Instance cards: the same heavy-ink panels as the rest of the manga theme. */
+#view-instances .instance-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;align-items:start}
+#view-instances .instance-card{min-width:0;background:var(--panel);border:3px solid #000;box-shadow:5px 5px 0 #000;padding:18px;transition:transform .18s,box-shadow .18s}
+@media(hover:hover) and (pointer:fine){#view-instances .instance-card:hover{transform:rotate(-.4deg);box-shadow:7px 7px 0 #000}}
+#view-instances .instance-card-head{display:flex;align-items:center;gap:10px;min-width:0;margin-bottom:14px}
+#view-instances .instance-card-head strong{font-size:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#view-instances .instance-card-head .badge{margin-left:auto;flex-shrink:0}
+#view-instances .instance-facts{display:grid;grid-template-columns:74px minmax(0,1fr);gap:8px 10px;margin:0 0 16px;font-size:12px;line-height:1.35}
+#view-instances .instance-facts dt{color:var(--muted)}
+#view-instances .instance-facts dd{margin:0;min-width:0;overflow-wrap:anywhere;font-family:Consolas,"Courier New",monospace}
+#view-instances .instance-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+#view-instances .instance-actions button,#view-instances .instance-ip-actions button{min-width:0;padding:7px 5px;font-size:11px;line-height:1.3;white-space:normal}
+#view-instances .instance-actions button:first-child{grid-column:1/-1}
+#view-instances .instance-actions button:nth-last-child(-n+2){grid-column:span 3}
+#view-instances .instance-ip-actions{display:flex;gap:8px;flex-wrap:wrap;border-top:2px dashed #000;padding-top:12px;margin-top:14px}
+@media(max-width:1280px){#view-instances .instance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:780px){#view-instances .instance-grid{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){#view-instances .instance-card{transition:none}#view-instances .instance-card:hover{transform:none}}

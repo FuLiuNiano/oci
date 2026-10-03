@@ -3,10 +3,12 @@ services:
     build: .
     container_name: oci-panel
     ports:
-      - "${PANEL_BIND:-0.0.0.0}:${PANEL_PORT:-9528}:9528"
+      - "${PANEL_BIND:-127.0.0.1}:${PANEL_PORT:-9528}:9528"
     environment:
       PYTHONUNBUFFERED: "1"
+      HOST: "0.0.0.0"
       COOKIE_SECURE: "${COOKIE_SECURE:-0}"
+      FORWARDED_ALLOW_IPS: "${FORWARDED_ALLOW_IPS:-127.0.0.1}"
     volumes:
       - ./data:/app/data
     restart: unless-stopped

@@ -49,9 +49,24 @@ def client(database, monkeypatch):
     from fastapi.testclient import TestClient
     monkeypatch.setattr(tasks, "start", lambda: None)
     main._login_attempts.clear()
-    with TestClient(main.app) as c:
-        pw = (database / "initial_admin_password.txt").read_text().strip()
-        assert c.post("/api/login", json={"password": pw}).status_code == 200
+    class PrefixedClient(TestClient):
+        def request(self, method, url, *args, **kwargs):
+            if isinstance(url, str) and url.startswith("/") and url != "/healthz":
+                url = self.prefix + url
+            return super().request(method, url, *args, **kwargs)
+
+        def websocket_connect(self, url, *args, **kwargs):
+            if url.startswith("/"):
+                url = self.prefix + url
+            return super().websocket_connect(url, *args, **kwargs)
+
+    with PrefixedClient(main.app) as c:
+        c.prefix = "/" + store.get_setting("access_path")
+        details = (database / "initial_admin_credentials.txt").read_text(encoding="utf-8").splitlines()
+        username = details[1].split(": ", 1)[1]
+        pw = details[2].split(": ", 1)[1]
+        assert c.post("/api/login", json={"username": username, "password": pw}).status_code == 200
+        c.initial_username = username
         c.initial_password = pw
         yield c
 

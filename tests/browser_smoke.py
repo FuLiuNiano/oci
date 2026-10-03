@@ -36,7 +36,10 @@ def main():
                             break
                     except OSError:
                         time.sleep(0.2)
-                password = (Path(directory) / "initial_admin_password.txt").read_text().strip()
+                details = (Path(directory) / "initial_admin_credentials.txt").read_text(encoding="utf-8").splitlines()
+                access_path = details[0].split(": ", 1)[1]
+                username = details[1].split(": ", 1)[1]
+                password = details[2].split(": ", 1)[1]
                 with sync_playwright() as p:
                     browser = p.chromium.launch(channel="chrome", headless=True)
                     page = browser.new_page(viewport={"width":1440, "height":1000})
@@ -53,6 +56,8 @@ def main():
                     page.on("pageerror", lambda error:errors.append(str(error)))
                     def replies(route):
                         path = route.request.url.split(base)[-1].split("?")[0]
+                        if path.startswith(access_path):
+                            path = "/" + path[len(access_path):]
                         if path == "/api/ssh/sftp/list":
                             data = {"data":[{"name":"demo.txt","dir":False,"size":256,"mtime":0}]}
                         elif path == "/api/panel/metrics":
@@ -79,9 +84,16 @@ def main():
                         elif path == "/api/cloud/oci/instances":
                             data = {"data":[{"id":"instance1","name":"test-instance","state":"RUNNING",
                                              "shape":"VM.Standard.A1.Flex","spec":"1C/6G","public_ip":"203.0.113.2",
-                                             "private_ip":"10.0.0.2","ad":"AD1"}]}
+                                             "private_ip":"10.0.0.2","ad":"AD1","can_reset_image":True,
+                                             "created":"2026-10-03T00:00:00Z"}]}
+                        elif path == "/api/oci/boot-volumes":
+                            data = {"data":[{"id":"boot1","instance_id":"instance1","name":"boot",
+                                              "size_gbs":50,"vpus":10,"state":"AVAILABLE"}]}
                         elif path == "/api/cloud/oci/action":
-                            assert route.request.post_data_json["action"] == "SOFTRESET"
+                            body = route.request.post_data_json
+                            assert body["action"] in ("SOFTRESET", "TERMINATE")
+                            if body["action"] == "TERMINATE":
+                                assert body["preserve_boot_volume"] is True
                             data = {"ok":True}
                         elif path.startswith("/api/oci/"):
                             data = {"data":[]}
@@ -90,8 +102,9 @@ def main():
                             return
                         route.fulfill(status=200, content_type="application/json", body=json.dumps(data))
                     page.route("**/api/**", replies)
-                    page.goto(base)
+                    page.goto(base + access_path)
                     page.locator("#view-login").wait_for(state="visible")
+                    page.fill("#login-user",username)
                     page.fill("#login-pass",password)
                     page.click("#btn-login")
                     page.locator("#app").wait_for(state="visible")
@@ -117,14 +130,18 @@ def main():
                     page.click("#btn-save-account")
                     page.locator("#account-form").wait_for(state="hidden")
                     page.click('nav button[data-view="instances"]')
-                    page.locator('#inst-table button[data-act="REBOOT"]').wait_for()
+                    page.locator('#inst-cards button[data-act="REBOOT"]').wait_for()
+                    assert "50 GB" in page.locator("#inst-cards").inner_text()
+                    preview = Path(os.environ.get("OCI_UI_PREVIEW_DIR", tempfile.gettempdir()))
+                    preview.mkdir(parents=True, exist_ok=True)
+                    page.screenshot(path=str(preview / "instance-cards.png"), full_page=True)
                     page.once("dialog", lambda dialog:dialog.accept())
-                    page.click('#inst-table button[data-act="REBOOT"]')
+                    page.click('#inst-cards button[data-act="REBOOT"]')
+                    page.once("dialog", lambda dialog:dialog.accept("test-instance"))
+                    page.click('#inst-cards button[data-act="TERMINATE_KEEP"]')
                     for name in ("launch","volumes","network","users","objects","domains","ssh","mail","settings"):
                         page.click(f'nav button[data-view="{name}"]')
                         assert page.locator(f"#view-{name}").is_visible()
-                    preview = Path(os.environ.get("OCI_UI_PREVIEW_DIR", tempfile.gettempdir()))
-                    preview.mkdir(parents=True, exist_ok=True)
                     page.click('nav button[data-view="overview"]')
                     for kind in ("usage", "traffic", "regions", "stats"):
                         page.click(f'[data-cloud-metric="{kind}"]')
@@ -139,7 +156,7 @@ def main():
                         page.wait_for_function("s => !document.querySelector(s).disabled", arg=button)
                     assert "1.250 GB" in page.locator('#cloud-monitor-results').inner_text()
                     for index, name in enumerate(("Production", "Development", "Backup")):
-                        response = page.request.post(base + "/api/ssh/sessions", data={
+                        response = page.request.post(base + access_path + "api/ssh/sessions", data={
                             "name":name,"host":f"203.0.113.{10+index}","username":"ubuntu",
                             "auth_type":"password","secret":"synthetic-browser-only","tags":"Ubuntu,OCI"})
                         assert response.ok
@@ -238,8 +255,23 @@ def main():
                     page.screenshot(path=str(preview / "mobile-dark.png"), full_page=True)
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
                     page.click('nav button[data-view="settings"]')
+                    page.wait_for_function("document.querySelector('#cf-settings-state').textContent.includes('Token')")
+                    assert page.locator('#mcp-endpoint').inner_text() == base + access_path + 'mcp'
+                    page.fill('#cf-email', 'test@example.com')
+                    page.fill('#cf-key', 'synthetic-browser-global-key')
+                    page.click('#btn-cf-settings-save')
+                    page.wait_for_function("document.querySelector('#cf-settings-state').textContent.includes('Global Key：已保存')")
+                    assert page.locator('#cf-key').input_value() == ''
+                    page.fill('#cf-email', 'updated@example.com')
+                    with page.expect_response(lambda r: '/api/cf/settings' in r.url and r.request.method == 'POST') as saved:
+                        page.click('#btn-cf-settings-save')
+                    assert saved.value.status == 200
+                    page.wait_for_function("document.querySelector('#cf-settings-state').textContent.includes('Global Key：已保存')")
+                    page.route('**/api/cf/test', lambda route: route.fulfill(content_type='application/json', body='{"ok":true,"zones":1}'))
+                    page.click('#btn-cf-test')
+                    page.wait_for_function("document.querySelector('#cf-settings-state').textContent.includes('连接成功')")
                     page.fill("#p-old",password)
-                    page.fill("#p-new","browser-new-password")
+                    page.fill("#p-new","browser-new-password-32-characters")
                     page.click("#btn-save-pass")
                     page.locator("#view-login").wait_for(state="visible")
                     assert not errors, errors

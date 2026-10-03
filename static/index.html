@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OCI Panel · 自托管甲骨文云管理面板</title>
-<link rel="stylesheet" href="/static/vendor/xterm.css">
-<link rel="stylesheet" href="/static/style.css">
-<link rel="stylesheet" href="/static/manga-layout.css">
-<link rel="stylesheet" href="/static/manga.css">
+<link rel="stylesheet" href="static/vendor/xterm.css">
+<link rel="stylesheet" href="static/style.css">
+<link rel="stylesheet" href="static/manga-layout.css">
+<link rel="stylesheet" href="static/manga.css">
 </head>
 <body>
 <header>
@@ -26,9 +26,10 @@
 
 <div id="view-login" class="login-wrap hide">
   <div class="login-card">
-<img class="manga-login-art" src="/static/assets/manga-hero.svg" alt="云朵与闪电的原创漫画插画" width="800" height="400">
+<img class="manga-login-art" src="static/assets/manga-hero.svg" alt="云朵与闪电的原创漫画插画" width="800" height="400">
 <h2>⚡ OCI Panel</h2>
     <p class="muted">自托管甲骨文云管理面板</p>
+    <input id="login-user" type="text" placeholder="管理员用户名" autocomplete="username" spellcheck="false">
     <input id="login-pass" type="password" placeholder="管理员密码" autocomplete="current-password">
     <button id="btn-login">登 录</button>
     <p id="login-err" class="err"></p>
@@ -97,10 +98,7 @@
     <span id="inst-summary" class="muted"></span>
 
   </div>
-  <div class="table-wrap"><table id="inst-table">
-    <thead><tr><th>云</th><th>名称</th><th>状态</th><th>规格</th><th>公网IP</th><th>私网IP</th><th>可用域</th><th>操作</th></tr></thead>
-    <tbody></tbody>
-  </table></div>
+  <div id="inst-cards" class="instance-grid" aria-live="polite"></div>
 
 
 </section>
@@ -368,6 +366,17 @@
 
 <!-- 设置 -->
 <section id="view-settings" class="view">
+  <div class="card"><h3 class="sec" style="margin-top:0">Cloudflare 凭据</h3>
+    <p class="muted">推荐使用 API Token。密钥留空保留原值；两种凭据同时保存时优先使用 Token。</p>
+    <div class="form-grid">
+      <div><label>API Token</label><input id="cf-token" type="password" autocomplete="new-password" placeholder="留空保留已保存的 Token"></div>
+      <div><label>账号邮箱（Global Key 方式）</label><input id="cf-email" type="email"></div>
+      <div><label>Global API Key</label><input id="cf-key" type="password" autocomplete="new-password" placeholder="留空保留已保存的密钥"></div>
+    </div>
+    <label class="chk"><input id="cf-clear-token" type="checkbox">删除已保存的 Token</label>
+    <label class="chk"><input id="cf-clear-key" type="checkbox">删除已保存的 Global Key</label>
+    <div class="bar"><button id="btn-cf-settings-save">保存 Cloudflare 配置</button><button id="btn-cf-test" class="ghost">测试已保存配置</button><span id="cf-settings-state" class="muted"></span></div>
+  </div>
   <div class="card"><h3 class="sec" style="margin-top:0">通知推送（全部可选，自己的渠道，本地管理）</h3>
     <div class="form-grid">
       <div><label>Bark 地址</label><input id="s-bark" placeholder="https://api.day.app/你的key"></div>
@@ -383,24 +392,24 @@
       <div><label>磁盘 ≥</label><input id="al-disk" type="number" value="90"></div>
     </div><button id="btn-save-alerts" style="margin-top:10px">保存阈值</button></div>
   <div class="card"><h3 class="sec" style="margin-top:0">MCP 接入</h3>
-    <p class="muted" style="font-size:12px">让 Claude Code / Codex / Cursor 通过面板操作你的云和服务器。端点 <code>http://面板地址/mcp</code>，Header 带 <code>Authorization: Bearer 令牌</code>。</p>
+    <p class="muted" style="font-size:12px">让 MCP 客户端通过面板操作你的云和服务器。端点 <code id="mcp-endpoint"></code>，Header 带 <code>Authorization: Bearer 令牌</code>。</p>
     <div class="bar"><code id="mcp-token" style="word-break:break-all"></code>
       <button id="btn-mcp-regen" class="ghost">重新生成令牌</button></div></div>
   <div class="card"><h3 class="sec" style="margin-top:0">修改面板密码</h3>
     <div class="form-grid">
       <div><label>旧密码</label><input id="p-old" type="password"></div>
-      <div><label>新密码（≥12位）</label><input id="p-new" type="password"></div>
+      <div><label>新密码（至少 32 位）</label><input id="p-new" type="password" autocomplete="new-password"></div>
     </div><button id="btn-save-pass" style="margin-top:10px">修改密码</button></div>
 </section>
 </main>
 
 <div id="toast" class="toast"></div>
-<script src="/static/vendor/xterm.js"></script>
-<script src="/static/vendor/xterm-fit.js"></script>
-<script src="/static/app.js"></script>
-<script src="/static/cloud.js"></script>
-<script src="/static/webssh.js"></script>
-<script src="/static/dashboard.js"></script>
+<script src="static/vendor/xterm.js"></script>
+<script src="static/vendor/xterm-fit.js"></script>
+<script src="static/app.js"></script>
+<script src="static/cloud.js"></script>
+<script src="static/webssh.js"></script>
+<script src="static/dashboard.js"></script>
 
 </body>
 </html>

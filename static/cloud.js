@@ -2,6 +2,7 @@
 (function () {
   const instAccount = () => Number($("#inst-account").value || 0);
   const acctById = id => state.accounts.find(a => a.id === Number(id));
+  const bootCache = new Map();
 
   /* ================= 实例 ================= */
 
@@ -15,8 +16,17 @@
       const url = platform === "oci"
         ? `/api/cloud/oci/instances?account_id=${acct.id}`
         : `/api/cloud/${platform}/instances?account_id=${acct.id}`;
-      const r = await api(url);
-      renderInstances(platform, acct, r.data);
+      const cachedBoot = bootCache.get(acct.id);
+      const bootRequest = cachedBoot && Date.now() - cachedBoot.at < 120000
+        ? Promise.resolve({data: cachedBoot.data})
+        : api(`/api/oci/boot-volumes?account_id=${acct.id}`)
+            .then(result => { bootCache.set(acct.id, {data: result.data, at: Date.now()}); return result; })
+            .catch(() => ({data: cachedBoot?.data || []}));
+      const [r, boot] = await Promise.all([
+        api(url), bootRequest,
+      ]);
+      if (instAccount() !== acct.id) return;
+      renderInstances(platform, acct, r.data, boot.data);
       if (!silent) $("#inst-summary").textContent = "";
     } catch (e) {
       if (!silent) { $("#inst-summary").textContent = ""; toast(e.message, false); }
@@ -32,62 +42,93 @@
     return `<span class="badge ${m[1]}">${esc(m[0])}</span>`;
   }
 
-  function renderInstances(platform, acct, list) {
+  function renderInstances(platform, acct, list, bootVolumes = []) {
     const isOci = platform === "oci";
-    $("#inst-table tbody").innerHTML = list.map(i => {
+    const bootByInstance = new Map(bootVolumes.filter(v => v.instance_id).map(v => [v.instance_id, v]));
+    $("#inst-cards").innerHTML = list.map(i => {
       const d = esc;
       const hasErr = i.error !== undefined;
       if (hasErr) {
-        return `<tr><td>${esc(PLATFORM_LABEL[platform] || platform)}</td><td colspan="7" class="err-cell" style="max-width:none">账号 ${esc(i.account_name)}: ${esc(i.error)}</td></tr>`;
+        return `<article class="instance-card"><p class="err">账号 ${d(i.account_name)}：${d(i.error)}</p></article>`;
       }
-      const kind = i.kind || "";
-      let ops = `
-        <button data-act="start" data-id="${d(i.id)}" data-kind="${kind}" ${i.state === "RUNNING" ? "disabled" : ""}>启动</button>
-        <button data-act="STOP" data-id="${d(i.id)}" data-kind="${kind}" ${i.state !== "RUNNING" ? "disabled" : ""}>关机</button>
-        <button data-act="REBOOT" data-id="${d(i.id)}" data-kind="${kind}" ${i.state !== "RUNNING" ? "disabled" : ""}>重启</button>
-        <button data-act="ip" data-id="${d(i.id)}" ${i.public_ip || i.state === "RUNNING" ? "" : "disabled"}>换IP</button>
-        <button data-act="TERMINATE" class="danger" data-id="${d(i.id)}" data-name="${d(i.name)}" data-kind="${kind}">终止</button>`;
-      if (isOci) {
-        ops += `
-        <button data-act="resize" data-id="${d(i.id)}" data-name="${d(i.name)}">升降配</button>
-        <button data-act="reinstall" data-id="${d(i.id)}" data-name="${d(i.name)}">重建</button>
-        <button data-act="ipv6" data-id="${d(i.id)}">IPv6</button>
-        <button data-act="console" data-id="${d(i.id)}" data-name="${d(i.name)}">串口日志</button>`;
-      }
-      return `<tr>
-        <td><span class="chip">${esc(PLATFORM_LABEL[platform] || platform)}</span></td>
-        <td>${d(i.name)}</td><td>${stateBadge(i.state)}</td>
-        <td>${d(i.spec || i.shape || "")}</td>
-        <td>${d(i.public_ip)}</td><td>${d(i.private_ip)}</td><td style="font-size:12px">${d(i.ad)}</td>
-        <td class="ops">${ops}</td></tr>`;
-    }).join("") || `<tr><td colspan="8" class="muted">该账号下没有实例</td></tr>`;
+      const volume = bootByInstance.get(i.id);
+      const op = (act, label, disabled = false, danger = false) =>
+        `<button data-act="${act}" data-id="${d(i.id)}" data-name="${d(i.name)}" ${disabled ? "disabled" : ""} ${danger ? 'class="danger"' : ""}>${label}</button>`;
+      return `<article class="instance-card" data-instance-id="${d(i.id)}" data-host="${d(i.public_ip)}">
+        <div class="instance-card-head"><strong title="${d(i.name)}">${d(i.name)}</strong>${stateBadge(i.state)}</div>
+        <dl class="instance-facts">
+          <dt>公网 IP</dt><dd>${d(i.public_ip || "未分配")}</dd>
+          <dt>Shape</dt><dd title="${d(i.shape)}">${d(i.shape)}</dd>
+          <dt>规格</dt><dd>${d(i.spec || "—")}</dd>
+          <dt>启动盘</dt><dd>${volume ? `${d(volume.size_gbs)} GB · VPU ${d(volume.vpus ?? "—")} · ${d(volume.state)}` : "暂未读取到"}</dd>
+          <dt>创建时间</dt><dd>${d(i.created || "—")}</dd>
+        </dl>
+        <div class="instance-actions">
+          ${op("ssh", "〉_ SSH", !i.public_ip)}
+          ${op("STOP", "关机", i.state !== "RUNNING")}
+          ${op("REBOOT", "重启", i.state !== "RUNNING")}
+          ${op("console", "串口日志")}
+          ${op("rename", "重命名")}
+          ${isOci ? op("resize", "升级 / 调配", !i.shape?.endsWith(".Flex")) : ""}
+          ${isOci ? op("repair", "诊断重启", i.state !== "RUNNING") : ""}
+          ${isOci ? op("reset-image", "重置镜像", !i.can_reset_image, true) : ""}
+          ${op("ip-menu", "IP 管理")}
+          ${op("boot", "启动盘")}
+          ${op("start", "开机", i.state !== "STOPPED")}
+          ${op("TERMINATE", "删除", false, true)}
+          ${op("TERMINATE_KEEP", "删除（保留启动盘）", false, true)}
+        </div>
+        <div class="instance-ip-actions hide">
+          ${op("ip", "换临时 IP", !i.public_ip)}
+          ${op("reserved-ip", "保留 IP 管理")}
+          ${op("ipv6", "附加 IPv6")}
+        </div>
+      </article>`;
+    }).join("") || `<div class="empty-state card">该账号下没有实例</div>`;
     $("#inst-summary").textContent = list.length ? `共 ${list.length} 台` : "";
 
   }
 
-  async function instAction(action, id, name, kind) {
+  async function instAction(action, id, name, kind, preserveBootVolume = false) {
     const acct = acctById(instAccount());
-    const body = { account_id: acct.id, instance_id: id, action, kind, rg: acct.params?.resource_group || "", zone: "" };
+    const body = { account_id: acct.id, instance_id: id, action, kind,
+      preserve_boot_volume: preserveBootVolume, rg: acct.params?.resource_group || "", zone: "" };
     await api(`/api/cloud/${acct.platform}/action`, { method: "POST", body });
     toast("指令已提交：" + action);
     loadInstances(true);
   }
 
-  $("#inst-table tbody").addEventListener("click", async (e) => {
+  $("#inst-cards").addEventListener("click", async (e) => {
     const btn = e.target.closest("button[data-act]");
     if (!btn || btn.disabled) return;
     const { act, id, name, kind } = btn.dataset;
     const acct = acctById(instAccount());
     const isOci = acct.platform === "oci";
     try {
+      if (act === "ssh") { await window.openCloudInstanceSsh(btn.closest(".instance-card").dataset.host); return; }
+      if (act === "boot") {
+        $("#vol-account").value = String(acct.id);
+        switchView("volumes");
+        return;
+      }
+      if (act === "ip-menu") {
+        btn.closest(".instance-card").querySelector(".instance-ip-actions").classList.toggle("hide");
+        return;
+      }
+      if (act === "reserved-ip") {
+        $("#net-account").value = String(acct.id);
+        switchView("network");
+        return;
+      }
       if (act === "start") { if (!confirm(`确认启动 ${name || id}？`)) return; await instAction("START", id, name, kind); }
       else if (act === "STOP") { if (!confirm(`确认关机 ${name || id}？`)) return; await instAction("STOP", id, name, kind); }
       else if (act === "REBOOT") { if (!confirm(`确认重启 ${name || id}？`)) return; await instAction("SOFTRESET", id, name, kind); }
-      else if (act === "TERMINATE") {
-        const input = prompt(`高危操作！将终止并释放实例 ${name || id}，数据不可恢复！\n如确认请输入实例名称：`);
+      else if (act === "TERMINATE" || act === "TERMINATE_KEEP") {
+        const keep = act === "TERMINATE_KEEP";
+        const input = prompt(`高危操作！将终止实例 ${name || id}。${keep ? "原启动盘会保留并可能继续计费。" : "原启动盘将删除，数据不可恢复。"}\n如确认请输入实例名称：`);
         if (input === null) return;
         if (input.trim() !== (name || id)) { toast("名称不一致，已取消", false); return; }
-        await instAction("TERMINATE", id, name, kind);
+        await instAction("TERMINATE", id, name, kind, keep);
       } else if (act === "ip") {
         if (!confirm("换公网IP？临时IP会解绑后分配新的。")) return;
         const r = await api(`/api/cloud/${acct.platform}/change-ip`, { method: "POST", body: {
@@ -101,6 +142,25 @@
         if (!o || !m) { toast("格式不对", false); return; }
         await api("/api/oci/resize", { method: "POST", body: { account_id: acct.id, instance_id: id, ocpus: o, memory_gbs: m } });
         toast("升降配已提交"); loadInstances(true);
+      } else if (act === "rename") {
+        const next = prompt("新的实例名称：", name || "");
+        if (next === null) return;
+        if (!next.trim()) { toast("名称不能为空", false); return; }
+        await api("/api/oci/rename", { method: "POST", body: {
+          account_id: acct.id, instance_id: id, name: next.trim() } });
+        toast("重命名已提交"); loadInstances(true);
+      } else if (act === "repair") {
+        if (!confirm(`对 ${name} 执行诊断重启？这会强制断电并重建物理宿主机上的实例，可能造成短暂中断；不保证修复系统问题。`)) return;
+        await api("/api/oci/diagnostic-reboot", { method: "POST", body: {
+          account_id: acct.id, instance_id: id } });
+        toast("诊断重启已提交"); loadInstances(true);
+      } else if (act === "reset-image") {
+        const typed = prompt(`将按创建时的原镜像替换 ${name} 的启动盘，当前系统盘内容会从实例上移除。旧启动盘默认保留，可能继续计费。确认请输入实例名称：`);
+        if (typed === null) return;
+        if (typed.trim() !== name) { toast("名称不一致，已取消", false); return; }
+        const r = await api("/api/oci/reset-image", { method: "POST", body: {
+          account_id: acct.id, instance_id: id } });
+        toast(r.message); loadInstances(true);
       } else if (act === "reinstall") {
         if (!confirm(`按原镜像重建 ${name}？将新建实例并保留旧实例及数据，可能需要额外配额。确认新实例可用后再手动释放旧资源。`)) return;
         const r = await api("/api/oci/reinstall", { method: "POST", body: { account_id: acct.id, instance_id: id } });

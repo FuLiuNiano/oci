@@ -1,6 +1,8 @@
 /* OCI Panel 前端核心：API、登录、页签、概览、云账号、域名监控、邮件、设置 */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const PANEL_PREFIX = "/" + location.pathname.split("/")[1];
+const panelPath = path => PANEL_PREFIX + path;
 
 const state = {
   accounts: [],
@@ -39,7 +41,7 @@ async function api(path, opts = {}) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(opts.body);
   }
-  const res = await fetch(path, init);
+  const res = await fetch(panelPath(path), init);
   if (res.status === 401) { showLogin(); throw new Error("未登录"); }
   let data = {};
   try { data = await res.json(); } catch {}
@@ -83,7 +85,8 @@ async function boot() {
 async function doLogin() {
   $("#login-err").textContent = "";
   try {
-    await api("/api/login", { method: "POST", body: { password: $("#login-pass").value } });
+    await api("/api/login", { method: "POST", body: {
+      username: $("#login-user").value, password: $("#login-pass").value } });
     $("#login-pass").value = "";
     await boot();
   } catch (e) { $("#login-err").textContent = e.message; }
@@ -441,6 +444,8 @@ $("#mo-table tbody").addEventListener("click", async (e) => {
 
 async function loadSettings() {
   try {
+    $("#mcp-endpoint").textContent = location.origin + panelPath("/mcp");
+    await loadCfSettings();
     const r = await api("/api/settings/notify");
     $("#s-bark").value = r.notify_bark_url || ""; $("#s-hook").value = r.notify_webhook || "";
     const a = await api("/api/settings/alerts");
@@ -449,6 +454,35 @@ async function loadSettings() {
     $("#mcp-token").textContent = m.token;
   } catch (e) { toast(e.message, false); }
 }
+
+async function loadCfSettings() {
+  const r = await api("/api/cf/settings");
+  $("#cf-token").value = "";
+  $("#cf-key").value = "";
+  $("#cf-email").value = r.email || "";
+  $("#cf-clear-token").checked = false;
+  $("#cf-clear-key").checked = false;
+  $("#cf-settings-state").textContent = `Token：${r.has_token ? "已保存" : "未配置"} · Global Key：${r.has_key ? "已保存" : "未配置"}`;
+}
+
+$("#btn-cf-settings-save").addEventListener("click", async () => {
+  try {
+    const clearToken = $("#cf-clear-token").checked, clearKey = $("#cf-clear-key").checked;
+    if ((clearToken || clearKey) && !confirm("确认删除勾选的 Cloudflare 凭据？")) return;
+    await api("/api/cf/settings", { method: "POST", body: {
+      api_token: $("#cf-token").value, email: $("#cf-email").value,
+      global_key: $("#cf-key").value, clear_token: clearToken, clear_global_key: clearKey,
+    }});
+    await loadCfSettings(); toast("Cloudflare 配置已保存");
+  } catch (e) { toast(e.message, false); }
+});
+$("#btn-cf-test").addEventListener("click", async () => {
+  try {
+    $("#cf-settings-state").textContent = "正在测试…";
+    const r = await api("/api/cf/test", { method: "POST" });
+    $("#cf-settings-state").textContent = `连接成功，可读取 ${r.zones} 个区域`;
+  } catch (e) { $("#cf-settings-state").textContent = e.message; }
+});
 
 $("#btn-save-notify").addEventListener("click", async () => {
   try {
@@ -491,6 +525,7 @@ $("#btn-save-pass").addEventListener("click", async () => {
 
 $$("nav button").forEach(b => b.addEventListener("click", () => switchView(b.dataset.view)));
 $("#btn-login").addEventListener("click", doLogin);
+$("#login-user").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
 $("#login-pass").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
 $("#btn-logout").addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" }).catch(() => {});
