@@ -118,6 +118,7 @@ def _connect_args(sess):
     args = dict(
         host=sess["host"], port=int(sess.get("port") or 22),
         username=sess.get("username") or "root",
+        config=None,
         connect_timeout=15,
         keepalive_interval=15, keepalive_count_max=3,
     )
@@ -137,7 +138,7 @@ async def _connect(sess):
         if saved:
             key = asyncssh.import_public_key(saved)
         else:
-            options = {}
+            options = {"config": None}
             if proxy:
                 sock = await _proxy_socket(sess, proxy)
                 options["sock"] = sock

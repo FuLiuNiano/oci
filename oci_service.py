@@ -7,10 +7,15 @@ import store
 import requests
 from urllib.parse import urlsplit
 from oci.exceptions import ServiceError
+from oci._vendor import requests as sdk_requests
 
 
 class OciError(Exception):
     """不可重试的业务错误。"""
+
+
+class OciTransportError(ConnectionError):
+    """Retryable transport error without proxy credentials or target details."""
 
 
 # ---------- 基础 ----------
@@ -40,6 +45,8 @@ def _client(cls, acct):
     client = cls(build_config(acct))
     proxy = store.account_params(acct).get("proxy_url", "")
     try:
+        if not isinstance(proxy, str):
+            raise ValueError("proxy must be a string")
         required = {}
         if proxy:
             parsed = urlsplit(proxy)
@@ -59,7 +66,12 @@ def _client(cls, acct):
         def send_via_account_route(request, **kwargs):
             # Freeze this account's route, including direct mode and redirects.
             kwargs["proxies"] = dict(required)
-            return original_send(request, **kwargs)
+            try:
+                return original_send(request, **kwargs)
+            except (requests.RequestException, sdk_requests.RequestException):
+                message = ("OCI 代理连接失败，未回退直连；请检查代理连通性和认证"
+                           if required else "OCI 连接失败，请检查服务器网络")
+                raise OciTransportError(message) from None
         session.send = send_via_account_route
     except Exception:
         raise OciError("代理配置失败，已阻止连接；请检查代理地址与 SOCKS 支持") from None
@@ -84,7 +96,9 @@ def is_transient(e):
         if e.status >= 500 or e.status == 429:
             return True
         return "capacity" in (e.code or "").lower()
-    return isinstance(e, (requests.RequestException, TimeoutError, ConnectionError))
+    return isinstance(e, (requests.RequestException, sdk_requests.RequestException,
+                         oci.exceptions.RequestException,
+                         TimeoutError, ConnectionError))
 
 
 def test_connection(acct):

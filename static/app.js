@@ -232,6 +232,11 @@ $("#btn-save-account").addEventListener("click", async () => {
     traffic_action: $("#a-trafficact").value,
   };
   if (!body.name) { toast("请填写名称", false); return; }
+  const previousAccount = state.accounts.find(a => a.id === state.editingAccountId);
+  if (previousAccount?.params?.proxy_url && !body.params.proxy_url) {
+    if (!confirm("移除这个账号的代理？保存后该账号的 OCI 请求将通过面板服务器直连。")) return;
+    body.remove_proxy = true;
+  }
   if (platform === "oci" && !state.editingAccountId &&
       !body.params.private_key.trim().startsWith("-----BEGIN")) {
     toast("OCI 私钥请粘贴 PEM 全文（-----BEGIN 开头）", false); return;

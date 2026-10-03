@@ -20,6 +20,66 @@ import sshpool
 import store
 
 
+def test_proxy_failure_hides_credentials_and_remains_retryable(account, monkeypatch):
+    secret = "synthetic-proxy-secret"
+    account["params"]["proxy_url"] = f"socks5h://test:{secret}@127.0.0.1:1080"
+    session = sdk_requests.Session()
+    def fail(*args, **kwargs):
+        raise sdk_requests.exceptions.ProxyError(account["params"]["proxy_url"])
+    monkeypatch.setattr(session, "send", fail)
+    factory = lambda _: SimpleNamespace(base_client=SimpleNamespace(session=session))
+    guarded = oci_service._client(factory, account).base_client.session
+    with pytest.raises(oci_service.OciTransportError, match="未回退直连") as result:
+        guarded.get("http://cloud.example.invalid/")
+    assert secret not in str(result.value)
+    assert oci_service.is_transient(result.value)
+    assert oci_service.is_transient(sdk_requests.exceptions.ConnectionError("temporary"))
+
+
+@pytest.mark.parametrize("key", [None, False, 123, []])
+def test_account_rejects_invalid_key_type(client, key):
+    response = client.post("/api/accounts", json={"name": "bad-key", "region": "ap-tokyo-1",
+                                                "params": {"private_key": key}})
+    assert response.status_code == 400
+
+
+def test_ssh_ignores_server_wide_ssh_config(ssh_server, tmp_path, monkeypatch):
+    from pathlib import Path
+    config = tmp_path / "unexpected_ssh_config"
+    config.write_text("Host *\n    ProxyCommand nonexistent-proxy-program\n")
+    expanduser = Path.expanduser
+    def isolated_home(path):
+        if path == Path("~", ".ssh", "config"):
+            return config
+        return expanduser(path)
+    monkeypatch.setattr(Path, "expanduser", isolated_home)
+    assert sshpool.test_session(ssh_server) == "ok"
+
+
+@pytest.mark.parametrize("value", [None, False, 0, [], {}])
+def test_invalid_proxy_type_never_enables_direct_route(account, value):
+    account["params"]["proxy_url"] = value
+    with pytest.raises(oci_service.OciError, match="已阻止连接"):
+        oci_service._client(oci.identity.IdentityClient, account)
+
+
+def test_removing_account_proxy_requires_explicit_confirmation(client, credentials):
+    body = {"name": "proxy-test", "region": "ap-singapore-1",
+            "params": {**credentials, "proxy_url": "socks5h://127.0.0.1:1080"}}
+    aid = client.post("/api/accounts", json=body).json()["id"]
+    body["params"]["proxy_url"] = ""
+    assert client.put(f"/api/accounts/{aid}", json=body).status_code == 400
+    saved = store.query("SELECT * FROM accounts WHERE id=?", (aid,))[0]
+    assert saved["params"]["proxy_url"] == "socks5h://127.0.0.1:1080"
+    body["params"]["proxy_url"] = None
+    assert client.put(f"/api/accounts/{aid}", json=body).status_code == 400
+    body["params"]["proxy_url"] = ""
+    body["remove_proxy"] = True
+    assert client.put(f"/api/accounts/{aid}", json=body).status_code == 200
+    saved = store.query("SELECT * FROM accounts WHERE id=?", (aid,))[0]
+    assert saved["params"]["proxy_url"] == ""
+
+
 @pytest.fixture
 def socks_proxy():
     destinations = []
@@ -72,10 +132,16 @@ def socks_proxy():
     sshpool._run(close())
 
 
-def test_oci_transport_forces_proxy_and_remote_dns(account, socks_proxy, monkeypatch):
+@pytest.mark.parametrize("redirect", [False, True])
+def test_oci_transport_forces_proxy_and_remote_dns(account, socks_proxy, monkeypatch, redirect):
     proxy, destinations, _ = socks_proxy
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if redirect and self.path == "/":
+                self.send_response(302)
+                self.send_header("Location", f"http://redirect.example.invalid:{self.server.server_port}/final")
+                self.end_headers()
+                return
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"through-socks-only")
@@ -94,7 +160,10 @@ def test_oci_transport_forces_proxy_and_remote_dns(account, socks_proxy, monkeyp
         result = session.get(f"http://cloud.example.invalid:{server.server_port}/",
                              proxies={"http": None}, timeout=3)
         assert result.text == "through-socks-only"
-        assert destinations == [("cloud.example.invalid", server.server_port)]
+        expected = [("cloud.example.invalid", server.server_port)]
+        if redirect:
+            expected.append(("redirect.example.invalid", server.server_port))
+        assert destinations == expected
         assert not session.trust_env
     finally:
         session.close()
@@ -121,7 +190,7 @@ def test_oci_dead_proxy_does_not_reach_direct_target(account):
         account["params"]["proxy_url"] = f"socks5://127.0.0.1:{unavailable.getsockname()[1]}"
         session = oci_service._client(oci.identity.IdentityClient, account).base_client.session
         try:
-            with pytest.raises((oci_service.requests.RequestException, sdk_requests.RequestException)):
+            with pytest.raises(oci_service.OciTransportError):
                 session.get(f"http://127.0.0.1:{server.server_port}/", timeout=2)
             assert not hits
         finally:
@@ -182,7 +251,7 @@ def test_two_oci_accounts_keep_routes_separate(account, socks_proxy, monkeypatch
             second["params"]["proxy_url"] = f"socks5://127.0.0.1:{unavailable.getsockname()[1]}"
             failed = oci_service._client(oci.identity.IdentityClient, second).base_client.session
             try:
-                with pytest.raises((oci_service.requests.RequestException, sdk_requests.RequestException)):
+                with pytest.raises(oci_service.OciTransportError):
                     failed.get(f"http://127.0.0.1:{server.server_port}/must-not-arrive", timeout=2)
                 assert direct.get(f"http://127.0.0.1:{server.server_port}/still-direct", timeout=3).status_code == 200
                 assert "/must-not-arrive" not in hits

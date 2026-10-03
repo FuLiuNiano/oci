@@ -34,8 +34,9 @@ def _validate_account(name, region, params):
         if not isinstance(params.get(key), str) or not params[key].strip():
             raise HTTPException(400, f"请填写 {key}")
     try:
-        oci_service._client(__import__("oci").identity.IdentityClient,
-                            {"region": region, "params": params})
+        validated = oci_service._client(__import__("oci").identity.IdentityClient,
+                                       {"region": region, "params": params})
+        validated.base_client.session.close()
     except Exception as e:
         raise HTTPException(400, f"OCI 配置无效: {oci_service.fmt_err(e)}")
 
@@ -62,6 +63,7 @@ class AccountBody(BaseModel):
     auto_restart: bool = False
     traffic_limit_gb: float = 0
     traffic_action: str = "notify"
+    remove_proxy: bool = False
 
 
 @api.get("/accounts")
@@ -74,7 +76,8 @@ def accounts_list(_: None = Depends(require_auth)):
 def accounts_add(body: AccountBody, _: None = Depends(require_auth)):
     if body.platform != "oci":
         raise HTTPException(400, f"不支持的平台 {body.platform}")
-    if body.platform == "oci" and not body.params.get("private_key", "").strip().startswith("-----BEGIN"):
+    private_key = body.params.get("private_key", "")
+    if not isinstance(private_key, str) or not private_key.strip().startswith("-----BEGIN"):
         raise HTTPException(400, "OCI 私钥格式不对：请粘贴 PEM 全文（-----BEGIN 开头）")
     _validate_account(body.name, body.region, body.params)
     aid = store.execute(
@@ -92,6 +95,10 @@ def accounts_update(account_id: int, body: AccountBody, _: None = Depends(requir
     acct = _account_or_404(account_id)
     params = dict(body.params)
     old = acct_params_keep(acct)
+    if old.get("proxy_url") and params.get("proxy_url") == "" and not body.remove_proxy:
+        raise HTTPException(400, "清空代理会恢复服务器直连，请明确确认移除代理")
+    if body.remove_proxy and params.get("proxy_url") != "":
+        raise HTTPException(400, "移除代理时代理地址必须为空")
     for k, v in old.items():
         if k not in params or (k == "private_key" and not params.get(k)):
             params[k] = v
