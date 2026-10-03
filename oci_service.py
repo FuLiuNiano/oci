@@ -714,6 +714,12 @@ def stats(acct):
     return out
 
 
+def subscribed_regions(acct):
+    identity = _client(oci.identity.IdentityClient, acct)
+    rows = _all(identity.list_region_subscriptions, store.account_params(acct)["tenancy_ocid"])
+    return [{"region": r.region_name, "status": r.status, "home": bool(r.is_home_region)} for r in rows]
+
+
 def usage_cost(acct, days=30):
     """近 N 天费用（需要账号有 usage-report 权限，失败会返回提示）。"""
     if not 1 <= days <= 365:
@@ -731,11 +737,15 @@ def usage_cost(acct, days=30):
         )
     )
     rows = {}
+    currencies = {}
     for item in resp.data.items:
         d = str(item.time_usage_started or "")[:10]
         rows[d] = rows.get(d, 0) + (item.computed_amount or 0)
+        currency = item.currency or "未标明币种"
+        currencies[currency] = currencies.get(currency, 0) + (item.computed_amount or 0)
     total = sum(rows.values())
-    return {"days": days, "total": round(total, 2), "daily": rows}
+    return {"days": days, "total": round(total, 2), "daily": rows,
+            "currencies": {k: round(v, 2) for k, v in currencies.items()}}
 
 
 # ---------- 对象存储 ----------

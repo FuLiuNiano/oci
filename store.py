@@ -90,6 +90,9 @@ def init_db():
         columns = {r[1] for r in conn.execute("PRAGMA table_info(launch_tasks)")}
         if "retry_token" not in columns:
             conn.execute("ALTER TABLE launch_tasks ADD COLUMN retry_token TEXT NOT NULL DEFAULT ''")
+        ssh_columns = {r[1] for r in conn.execute("PRAGMA table_info(ssh_sessions)")}
+        if "metadata" not in ssh_columns:
+            conn.execute("ALTER TABLE ssh_sessions ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
         if os.name != "nt":
             os.chmod(DATA_DIR, 0o700)
             os.chmod(DB_PATH, 0o600)

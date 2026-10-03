@@ -5,6 +5,8 @@
   let sftpSid = null;
   let sftpPath = "/";
   let editingSessionId = null;
+  const connectionStates = new Map();
+  $("#session-search").addEventListener("input", renderSessionCards);
 
   async function loadSessions() {
     try {
@@ -27,22 +29,28 @@
   };
 
   function renderSessionCards() {
-    $("#ssh-session-list").innerHTML = state.sessions.map(s => `
-      <div class="card sess-card">
-        <b>${esc(s.name)}</b> <span class="chip">${esc(s.tags || "ssh")}</span><br>
-        <span class="muted" style="font-size:12px">${esc(s.username)}@${esc(s.host)}:${s.port}</span><br>
-        <div class="bar" style="margin-top:8px">
-          <button data-sopen="${s.id}">终端</button>
-          <button class="ghost" data-ssftp="${s.id}">SFTP</button>
-          <button class="ghost" data-sedit="${s.id}">编辑</button>
-          <button class="ghost" data-stest="${s.id}">测试</button>
-          <button class="ghost" data-skey="${s.id}">重置信任</button>
-          <button class="danger" data-sdel="${s.id}">删除</button>
-        </div>
-      </div>`).join("") || `<div class="muted">还没有 SSH 会话，点「＋ 添加会话」或「从云主机同步」</div>`;
+    const query = $("#session-search").value.trim().toLowerCase();
+    const sessions = state.sessions.filter(s => `${s.name} ${s.host} ${s.username} ${s.tags}`.toLowerCase().includes(query));
+    $("#session-count").textContent = state.sessions.length;
+    $("#ssh-session-list").innerHTML = sessions.map(s => {
+      const m = s.metadata || {};
+      const status = connectionStates.get(s.id) || "未检测";
+      const action = (attr, label, icon, danger = false) => `<button class="icon-action ${danger ? "danger" : "ghost"}" ${attr}="${s.id}" title="${label}" aria-label="${label}">${uiIcon(icon)}</button>`;
+      return `<article class="session-card">
+        <div class="session-title"><span class="session-avatar">${uiIcon("terminal")}</span><h3 title="${esc(s.name)}">${esc(s.name)}</h3><span class="auth-pill">${s.auth_type === "key" ? "密钥" : "密码"}</span></div>
+        <p class="session-spec" title="${esc(m.shape || "")}">${esc(m.shape || "手动保存的 SSH 会话")}</p>
+        <div class="session-badges">${m.spec ? `<span class="chip blue">${esc(m.spec)}</span>` : ""}${m.memory_gbs ? `<span class="chip amber">${esc(m.memory_gbs)} GB</span>` : ""}${(s.tags || "").split(",").filter(Boolean).map(tag => `<span class="chip">${esc(tag.trim())}</span>`).join("")}</div>
+        <div class="session-address">${uiIcon("server")}<code>${esc(s.host)}:${s.port}</code><button class="ghost tiny" data-saddress="${s.id}" aria-label="复制地址" title="复制地址">${uiIcon("copy")}</button></div>
+        <div class="session-user"><span class="user-dot"></span>${esc(s.username)}<span class="muted">${s.proxy_command ? "通过服务器代理连接" : "面板服务器直连"}</span></div>
+        <div class="session-footer"><span class="connection-status ${status === "已连接" || status === "检测成功" ? "online" : ""}"><i></i>${esc(status)}</span><div>
+          ${action("data-sopen", "打开终端", "play")}${action("data-scopy", "复制会话", "copy")}${action("data-sedit", "编辑会话", "edit")}${action("data-sdel", "删除会话", "trash", true)}
+        </div></div>
+        <details class="session-more"><summary>文件与连接工具</summary><div class="bar">${action("data-ssftp", "打开 SFTP", "folder")}${action("data-stest", "测试连接", "check")}<button class="ghost tiny" data-skey="${s.id}">重置信任</button></div></details>
+      </article>`;
+    }).join("") || `<div class="empty-state card">${query ? "没有匹配的会话，试试其他关键词。" : "还没有保存会话。添加一台服务器，或从 OCI 实例同步。"}</div>`;
   }
 
-  window.sshViewLoaded = function () { renderSessionCards(); };
+  window.sshViewLoaded = function () { renderSessionCards(); loadSessions(); };
 
   $("#ssh-session-list").addEventListener("click", async (e) => {
     const open = e.target.closest("[data-sopen]");
@@ -51,6 +59,19 @@
     const test = e.target.closest("[data-stest]");
     const del = e.target.closest("[data-sdel]");
     const key = e.target.closest("[data-skey]");
+    const copy = e.target.closest("[data-scopy]");
+    const address = e.target.closest("[data-saddress]");
+    if (copy) {
+      try { await api(`/api/ssh/sessions/${copy.dataset.scopy}/copy`, {method: "POST"}); await loadSessions(); toast("会话已复制，凭据保存在服务器端"); }
+      catch (err) { toast(err.message, false); }
+      return;
+    }
+    if (address) {
+      const s = state.sessions.find(s => s.id === Number(address.dataset.saddress));
+      try { await navigator.clipboard.writeText(`${s.host}:${s.port}`); toast("地址已复制"); }
+      catch { toast("浏览器不允许复制，请手动选择地址", false); }
+      return;
+    }
     if (open) openTerminal(Number(open.dataset.sopen));
     else if (sftp) openSftp(Number(sftp.dataset.ssftp));
     else if (edit) fillSessionForm(Number(edit.dataset.sedit));
@@ -58,8 +79,9 @@
       toast("测试连接中…");
       try {
         const r = await api(`/api/ssh/sessions/${test.dataset.stest}/test`, { method: "POST" });
+        connectionStates.set(Number(test.dataset.stest), "检测成功"); renderSessionCards();
         toast("✅ " + (r.output || "ok").slice(0, 120));
-      } catch (err) { toast("❌ " + err.message, false); }
+      } catch (err) { connectionStates.set(Number(test.dataset.stest), "检测失败"); renderSessionCards(); toast("❌ " + err.message, false); }
     } else if (key) {
       if (!confirm("确认已核实服务器身份并需要重新记录 SSH 主机公钥？下次连接会记录新的主机公钥。")) return;
       try { await api(`/api/ssh/sessions/${key.dataset.skey}/forget-host-key`, {method: "POST"}); toast("已清除记录，下次连接将重新验证并记录"); }
@@ -113,8 +135,10 @@
   });
 
   $("#btn-ssh-sync").addEventListener("click", async () => {
-    const acct = prompt("输入要同步的云账号 ID（账号页可看）：");
-    if (!acct) return;
+    const acct = $("#dashboard-account").value || state.instAccount;
+    if (!acct) { toast("请先在云账号页面添加账号", false); return; }
+    const name = state.accounts.find(a => String(a.id) === String(acct))?.name;
+    if (!confirm(`同步账号「${name || acct}」的实例？已有会话会更新规格，新会话需要填写 SSH 凭据。`)) return;
     try {
       const r = await api("/api/ssh/sync-cloud", { method: "POST", body: { account_id: Number(acct), username: "root" } });
       toast(`发现 ${r.found} 台实例，新建 ${r.created} 个会话`);
@@ -128,13 +152,24 @@
     const sess = state.sessions.find(x => x.id === sid);
     if (!sess) return;
     $("#term-area").classList.remove("hide");
-    if (terminals[sid]) { activateTab(sid); return; }
+    if (terminals[sid]) {
+      if (terminals[sid].ws.readyState <= 1) { activateTab(sid); return; }
+      closeTerminal(sid);
+      $("#term-area").classList.remove("hide");
+    }
 
     const tabBtn = document.createElement("button");
     tabBtn.textContent = sess.name;
     tabBtn.dataset.tsid = sid;
     tabBtn.addEventListener("click", () => activateTab(sid));
     $("#term-tabs").appendChild(tabBtn);
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "ghost term-close";
+    closeBtn.innerHTML = uiIcon("close");
+    closeBtn.title = `关闭终端 ${sess.name}`;
+    closeBtn.setAttribute("aria-label", closeBtn.title);
+    closeBtn.addEventListener("click", () => closeTerminal(sid));
+    $("#term-tabs").appendChild(closeBtn);
 
     const holder = document.createElement("div");
     holder.className = "term-holder hide";
@@ -150,9 +185,17 @@
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws/ssh?sid=${sid}&cols=${term.cols}&rows=${term.rows}`);
-    ws.onopen = () => term.focus();
+    ws.onopen = () => {
+      fit.fit(); term.focus();
+      ws.send(JSON.stringify({resize: {cols: term.cols, rows: term.rows}}));
+      connectionStates.set(sid, "已连接"); renderSessionCards();
+    };
     ws.onmessage = ev => term.write(ev.data);
-    ws.onclose = ev => { term.write(ev.code === 4401 ? "\r\n\r\n[未登录]" : "\r\n\r\n[连接已断开]"); };
+    ws.onclose = ev => {
+      connectionStates.set(sid, "已断开"); renderSessionCards();
+      if (!terminals[sid] || terminals[sid].ws !== ws) return;
+      term.write(ev.code === 4401 ? "\r\n\r\n[未登录]" : "\r\n\r\n[连接已断开，点击 × 关闭，或点击终端重新连接]");
+    };
     term.onData(data => { if (ws.readyState === 1) ws.send(data); });
     term.onResize(({ cols, rows }) => {
       if (ws.readyState === 1) ws.send(JSON.stringify({ resize: { cols, rows } }));
@@ -172,9 +215,10 @@
         term.write(`\r\n[贴图已上传] ${name}\r\n`);
       } catch (e) { term.write(`\r\n[贴图上传失败] ${e.message}\r\n`); }
     });
-    window.addEventListener("resize", () => { if (sid === activeSid) fit.fit(); });
+    const resize = () => { if (sid === activeSid) fit.fit(); };
+    window.addEventListener("resize", resize);
 
-    terminals[sid] = { term, ws, fit, tabBtn, holder };
+    terminals[sid] = { term, ws, fit, tabBtn, holder, closeBtn, resize };
     activateTab(sid);
   }
 
@@ -191,10 +235,21 @@
   function closeTerminal(sid) {
     const t = terminals[sid];
     if (!t) return;
+    t.ws.onclose = null;
     try { t.ws.close(); t.term.dispose(); } catch {}
+    window.removeEventListener("resize", t.resize);
     t.holder.remove();
     t.tabBtn.remove();
+    t.closeBtn.remove();
     delete terminals[sid];
+    connectionStates.set(sid, "已断开");
+    if (activeSid === sid) {
+      const next = Object.keys(terminals)[0];
+      activeSid = next ? Number(next) : null;
+      if (next) activateTab(Number(next));
+    }
+    if (!Object.keys(terminals).length) $("#term-area").classList.add("hide");
+    renderSessionCards();
   }
 
   /* ---- SFTP ---- */

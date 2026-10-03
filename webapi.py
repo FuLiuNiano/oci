@@ -14,6 +14,7 @@ import notify
 import oci_service
 import sshpool
 import store
+import host_monitor
 from deps import require_auth
 
 api = APIRouter(prefix="/api")
@@ -151,6 +152,37 @@ def accounts_stats(account_id: int, _: None = Depends(require_auth)):
 @api.get("/accounts/{account_id}/usage")
 def accounts_usage(account_id: int, days: int = 30, _: None = Depends(require_auth)):
     return _wrap(oci_service.usage_cost, _account_or_404(account_id), days)
+
+
+@api.get("/panel/metrics")
+def panel_metrics(_: None = Depends(require_auth)):
+    return host_monitor.snapshot()
+
+
+@api.get("/accounts/{account_id}/regions")
+def account_regions(account_id: int, _: None = Depends(require_auth)):
+    return {"data": _wrap(oci_service.subscribed_regions, _account_or_404(account_id))}
+
+
+@api.get("/accounts/{account_id}/traffic")
+def account_traffic(account_id: int, _: None = Depends(require_auth)):
+    return _wrap(oci_service.traffic_usage_gb, _account_or_404(account_id))
+
+
+@api.post("/accounts/{account_id}/check")
+def account_check(account_id: int, _: None = Depends(require_auth)):
+    acct = _account_or_404(account_id)
+    checks = []
+    for name, fn in (("API 密钥与可用域", oci_service.test_connection),
+                     ("当前区域实例读取", oci_service.list_instances),
+                     ("区域订阅读取", oci_service.subscribed_regions)):
+        try:
+            result = fn(acct)
+            checks.append({"name": name, "ok": True, "message": f"读取成功 · {len(result)} 项"})
+        except Exception as e:
+            checks.append({"name": name, "ok": False, "message": oci_service.fmt_err(e)})
+    return {"ok": all(c["ok"] for c in checks), "checks": checks,
+            "region": acct["region"], "account_name": acct["name"]}
 
 
 # ================= 概览（多云体检） =================
@@ -700,7 +732,25 @@ class SshBody(BaseModel):
 @api.get("/ssh/sessions")
 def ssh_sessions(_: None = Depends(require_auth)):
     rows = store.query("SELECT * FROM ssh_sessions ORDER BY id")
-    return {"data": [{**r, "secret": "***" if r["secret"] else ""} for r in rows]}
+    out = []
+    for r in rows:
+        try:
+            metadata = store.json.loads(r.get("metadata") or "{}")
+        except (ValueError, TypeError):
+            metadata = {}
+        out.append({**r, "metadata": metadata, "secret": "***" if r["secret"] else ""})
+    return {"data": out}
+
+
+@api.post("/ssh/sessions/{session_id}/copy")
+def ssh_session_copy(session_id: int, _: None = Depends(require_auth)):
+    s = _ssh_or_404(session_id)
+    columns = ("host", "port", "username", "auth_type", "secret", "proxy_command",
+               "tags", "monitor_cpu", "monitor_mem", "monitor_disk", "metadata")
+    sid = store.execute("INSERT INTO ssh_sessions(name," + ",".join(columns) + ") VALUES(" +
+                        ",".join(["?"] * (len(columns) + 1)) + ")",
+                        (s["name"] + " · 副本", *(s[c] for c in columns)))
+    return {"id": sid}
 
 
 @api.post("/ssh/sessions")
@@ -881,12 +931,14 @@ def ssh_sync_cloud(body: dict, _: None = Depends(require_auth)):
         ip = r.get("public_ip") or r.get("private_ip") or ""
         if not ip:
             continue
+        metadata = store.json.dumps({k: r.get(k) for k in ("shape", "spec", "ocpus", "memory_gbs", "state")})
         if store.query("SELECT id FROM ssh_sessions WHERE host=?", (ip,)):
+            store.execute("UPDATE ssh_sessions SET metadata=? WHERE host=?", (metadata, ip))
             continue
         store.execute(
-            "INSERT INTO ssh_sessions(name, host, username, auth_type, tags) VALUES(?,?,?,?,?)",
+            "INSERT INTO ssh_sessions(name, host, username, auth_type, tags, metadata) VALUES(?,?,?,?,?,?)",
             (r.get("name") or ip, ip, body.get("username", "root"), "password",
-             acct["platform"] + ":" + (acct["name"] or "")))
+             acct["platform"] + ":" + (acct["name"] or ""), metadata))
         created += 1
     return {"created": created, "found": len(rows)}
 
@@ -1011,7 +1063,7 @@ def mail_oci_domain_delete(domain_id: str, account_id: int, _: None = Depends(re
 
 # ---- 面板维护 ----
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 
 @api.get("/panel/version")

@@ -15,6 +15,24 @@ function esc(s) {
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function uiIcon(name) {
+  const paths = {
+    home: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    server: '<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6h.01M7 17h.01M11 6h6M11 17h6"/>',
+    terminal: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/>',
+    activity: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    play: '<path d="m8 4 13 8-13 8Z"/>',
+    copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V3H3v12h5"/>',
+    edit: '<path d="m15 4 5 5M4 20l4-1L21 6l-5-5L3 14Z"/>',
+    trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
+    folder: '<path d="M3 6V4h7l2 3h9v13H3Z"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c6 5 6 13 0 18-6-5-6-13 0-18Z"/>',
+    close: '<path d="m6 6 12 12M6 18 18 6"/>',
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.server}</svg>`;
+}
+
 async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {} };
   if (opts.body !== undefined) {
@@ -124,6 +142,7 @@ async function reloadAccounts() {
   state.instAccount = $("#inst-account").value;
   window.syncSshSessionSelects && window.syncSshSessionSelects();
   renderAccounts();
+  window.syncDashboardAccounts && window.syncDashboardAccounts();
 }
 
 /* ---------- 概览 ---------- */

@@ -10,9 +10,15 @@
 <body>
 
 <header>
-  <div class="brand">⚡ OCI Panel <span class="muted" id="ver" style="font-size:12px"></span></div>
+  <div class="brand"><span class="brand-mark">O</span> OCI Panel <span class="muted" id="ver" style="font-size:12px"></span></div>
+  <div id="host-metrics" class="host-metrics hide" aria-live="off" title="部署面板的服务器，每 3 秒刷新">
+    <span><small>CPU</small><b id="host-cpu">—</b><i class="mini-meter"><i id="host-cpu-meter"></i></i></span>
+    <span><small>MEM</small><b id="host-mem">—</b><i class="mini-meter"><i id="host-mem-meter"></i></i></span>
+    <span><small>NET</small><b><em id="host-rx">↓ —</em> <em id="host-tx">↑ —</em></b></span>
+    <span><small>APP</small><b id="host-app">—</b></span>
+  </div>
   <div id="hdr-user" class="hide">
-    <span class="muted">甲骨文云 · 开机任务 · SSH 终端</span>
+    <button id="btn-theme" class="ghost" title="切换浅色 / 深色">深色模式</button>
     <button id="btn-logout" class="ghost">退出</button>
   </div>
 </header>
@@ -31,6 +37,8 @@
 <nav>
   <button data-view="overview" class="active">概览</button>
   <button data-view="instances">实例</button>
+  <button data-view="diagnostics">配置体检</button>
+  <button data-view="cloudmonitor">云监控</button>
   <button data-view="launch">开机抢机</button>
   <button data-view="volumes">硬盘</button>
   <button data-view="network">网络/DNS</button>
@@ -45,7 +53,16 @@
 
 <!-- 概览 -->
 <section id="view-overview" class="view">
+  <div class="page-heading"><div><span class="eyebrow">WORKSPACE / OVERVIEW</span><h1>云资源总览</h1><p>账号、用量与任务，一处掌握。</p></div><button class="ghost" id="btn-refresh-overview">刷新概览</button></div>
+  <div class="bar profile-bar"><label for="dashboard-account">当前云账号</label><select id="dashboard-account"></select><span class="muted">下方卡片按当前账号、区域和 compartment 查询</span></div>
+  <div class="cloud-summary-grid">
+    <article class="summary-card"><div><span class="metric-icon">¥</span><h3>近 30 天成本</h3><button class="ghost" data-cloud-metric="usage">读取</button></div><section id="summary-usage">点击读取云端费用</section></article>
+    <article class="summary-card"><div><span class="metric-icon">↗</span><h3>24 小时出站流量</h3><button class="ghost" data-cloud-metric="traffic">读取</button></div><section id="summary-traffic">来自 OCI 实例监控指标</section></article>
+    <article class="summary-card"><div><span class="metric-icon">◎</span><h3>区域订阅</h3><button class="ghost" data-cloud-metric="regions">读取</button></div><section id="summary-regions">查看已订阅区域</section></article>
+    <article class="summary-card"><div><span class="metric-icon">◫</span><h3>计算配额</h3><button class="ghost" data-cloud-metric="stats">读取</button></div><section id="summary-stats">查看配额和已使用资源</section></article>
+  </div>
   <div class="cards" id="ov-cards"></div>
+  <div class="card"><div class="section-heading"><h3>云账号列表</h3><button id="btn-check-all" class="ghost">一键测活</button></div><div id="overview-profiles"></div></div>
   <div class="card"><h3 class="sec" style="margin-top:0">实例状态分布</h3><div id="ov-states" class="chips"></div>
     <h3 class="sec">账号错误</h3><div id="ov-errors" class="muted"></div></div>
   <div class="card"><h3 class="sec" style="margin-top:0">面板维护</h3>
@@ -56,6 +73,18 @@
     </div>
     <pre id="panel-log" class="logbox hide"></pre>
   </div>
+</section>
+
+<section id="view-diagnostics" class="view hide">
+  <div class="page-heading"><div><span class="eyebrow">WORKSPACE / HEALTH</span><h1>配置体检</h1><p>检查密钥、当前区域资源访问与区域订阅权限。</p></div></div>
+  <div class="bar"><select id="check-account"></select><button id="btn-account-check">开始体检</button></div>
+  <div id="diagnostic-results" class="card empty-state">选择云账号后开始检查。检查不会修改云资源。</div>
+</section>
+
+<section id="view-cloudmonitor" class="view hide">
+  <div class="page-heading"><div><span class="eyebrow">WORKSPACE / MONITORING</span><h1>云监控</h1><p>当前区域实例状态与最近 24 小时出站流量。</p></div></div>
+  <div class="bar"><select id="monitor-account"></select><button id="btn-cloud-monitor">读取监控</button><span class="muted">需 OCI 监控读取权限，实例需开启计算代理监控。</span></div>
+  <div id="cloud-monitor-results" class="card empty-state">选择账号并读取监控；缺失指标会显示“无数据”。</div>
 </section>
 
 <!-- 实例 -->
@@ -206,13 +235,15 @@
 
 <!-- SSH 终端 -->
 <section id="view-ssh" class="view">
+  <div class="page-heading"><div><span class="eyebrow">WORKSPACE / CONNECTIONS</span><h1>SSH 工作台</h1><p>安全连接你的服务器，管理终端、文件与转发。</p></div></div>
   <div class="bar"><button id="btn-ssh-new">＋ 添加会话</button>
     <button id="btn-ssh-sync" class="ghost">从云主机同步</button>
     <button id="btn-ssh-fwd" class="ghost">端口转发</button>
     <button id="btn-ssh-batch" class="ghost">批量命令</button>
     <button id="btn-ssh-monitor" class="ghost">资源监控</button></div>
 
-  <div id="ssh-session-list" class="cards"></div>
+  <div class="section-heading"><h2>已保存会话 <span id="session-count" class="count-pill">0</span></h2><input id="session-search" type="search" placeholder="搜索名称、主机、标签…" aria-label="搜索 SSH 会话"></div>
+  <div id="ssh-session-list" class="session-grid"></div>
 
   <div id="ssh-form" class="card hide"><h3 class="sec" style="margin-top:0" id="ssh-form-title">添加 SSH 会话</h3>
     <div class="form-grid">
@@ -366,5 +397,6 @@
 <script src="/static/app.js"></script>
 <script src="/static/cloud.js"></script>
 <script src="/static/webssh.js"></script>
+<script src="/static/dashboard.js"></script>
 </body>
 </html>

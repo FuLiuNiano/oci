@@ -43,7 +43,23 @@ def main():
                     page.on("pageerror", lambda error:errors.append(str(error)))
                     def replies(route):
                         path = route.request.url.split(base)[-1].split("?")[0]
-                        if path == "/api/overview":
+                        if path == "/api/panel/metrics":
+                            data = {"available":True,"scope":"host","cpu":11,"cores":1,
+                                    "memory_used":500*1024**2,"memory_total":1024**3,"memory_percent":49,
+                                    "network_rx":7600,"network_tx":4800,"app_memory":54*1024**2,
+                                    "disk_used":5*1024**3,"disk_total":20*1024**3}
+                        elif path.endswith("/usage"):
+                            data = {"currencies":{"USD":0.0},"daily":[],"total":0.0}
+                        elif path.endswith("/traffic"):
+                            data = {"total_gb":1.25,"per_resource":{"instance1":1.25}}
+                        elif path.endswith("/regions"):
+                            data = {"data":[{"region":"ap-singapore-1","status":"READY","home":True}]}
+                        elif path.endswith("/stats"):
+                            data = {"limits":[{"name":"standard-a1-core-count","used":1,"limit":4}]}
+                        elif path.endswith("/check"):
+                            data = {"ok":True,"account_name":"demo-account","region":"ap-singapore-1",
+                                    "checks":[{"name":"实例读取","ok":True,"message":"发现 1 台实例"}]}
+                        elif path == "/api/overview":
                             data = {"accounts":1,"instances":1,"running_tasks":0,"ssh_sessions":0,"domains":0,
                                     "states":{"RUNNING":1},"errors":[]}
                         elif path == "/api/oc-info":
@@ -95,13 +111,61 @@ def main():
                     for name in ("launch","volumes","network","users","objects","domains","ssh","mail","settings"):
                         page.click(f'nav button[data-view="{name}"]')
                         assert page.locator(f"#view-{name}").is_visible()
+                    preview = Path(os.environ.get("OCI_UI_PREVIEW_DIR", tempfile.gettempdir()))
+                    preview.mkdir(parents=True, exist_ok=True)
+                    page.click('nav button[data-view="overview"]')
+                    for kind in ("usage", "traffic", "regions", "stats"):
+                        page.click(f'[data-cloud-metric="{kind}"]')
+                        page.wait_for_function("k => !document.querySelector('[data-cloud-metric=\"'+k+'\"]').disabled", arg=kind)
+                    page.locator('#host-cpu').filter(has_text="11%").wait_for()
+                    page.wait_for_function("!document.querySelector('#toast').classList.contains('show')")
+                    page.screenshot(path=str(preview / "overview.png"), full_page=True)
+                    assert "USD" in page.locator('#summary-usage').inner_text()
+                    for name, button in (("diagnostics","#btn-account-check"),("cloudmonitor","#btn-cloud-monitor")):
+                        page.click(f'nav button[data-view="{name}"]')
+                        page.click(button)
+                        page.wait_for_function("s => !document.querySelector(s).disabled", arg=button)
+                    assert "1.250 GB" in page.locator('#cloud-monitor-results').inner_text()
+                    for index, name in enumerate(("Production", "Development", "Backup")):
+                        response = page.request.post(base + "/api/ssh/sessions", data={
+                            "name":name,"host":f"203.0.113.{10+index}","username":"ubuntu",
+                            "auth_type":"password","secret":"synthetic-browser-only","tags":"Ubuntu,OCI"})
+                        assert response.ok
+                    page.click('nav button[data-view="ssh"]')
+                    page.wait_for_function("document.querySelectorAll('.session-card').length === 3")
+                    page.screenshot(path=str(preview / "sessions.png"), full_page=True)
+                    page.fill('#session-search', 'Development')
+                    assert page.locator('.session-card').count() == 1
+                    page.click('[data-scopy]')
+                    page.wait_for_function("document.querySelectorAll('.session-card').length === 2")
+                    page.fill('#session-search','')
+                    assert page.locator('.session-card').count() == 4
+                    assert 'synthetic-browser-only' not in page.content()
+                    # Exercise actual xterm/close UI; only the remote SSH transport is simulated.
+                    page.route_web_socket("**/ws/ssh?*", lambda ws:ws.send("Demo terminal\r\n$ "))
+                    page.locator('[data-sopen]').first.click()
+                    page.locator('#term-area').wait_for(state="visible")
+                    page.locator('.term-close').click()
+                    page.locator('#term-area').wait_for(state="hidden")
+                    page.locator('[data-sopen]').first.click()
+                    page.locator('#term-area').wait_for(state="visible")
+                    page.locator('.term-close').click()
+                    page.click('#btn-theme')
+                    assert page.locator('html').get_attribute('data-theme') == 'dark'
+                    page.set_viewport_size({"width":390,"height":844})
+                    page.evaluate("scrollTo(0, 0)")
+                    page.wait_for_function("!document.querySelector('#toast').classList.contains('show')")
+                    page.wait_for_timeout(250)  # Allow CSS theme transitions to finish.
+                    page.screenshot(path=str(preview / "mobile-dark.png"), full_page=True)
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+                    page.click('nav button[data-view="settings"]')
                     page.fill("#p-old",password)
                     page.fill("#p-new","browser-new-password")
                     page.click("#btn-save-pass")
                     page.locator("#view-login").wait_for(state="visible")
                     assert not errors, errors
                     browser.close()
-                print("PASS: Chrome login, page switching, account add/edit, OCI reboot and password change")
+                print("PASS: Chrome login, account edit, cloud cards, diagnostics, session search/copy, terminal close/reopen, mobile layout, theme and password change; cloud replies/SSH transport simulated")
             finally:
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
