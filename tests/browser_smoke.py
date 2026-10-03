@@ -211,9 +211,9 @@ def main():
                     page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
                     assert page.evaluate("document.querySelector('#sftp-panel').parentElement.id") == "term-area"
                     page.click('#btn-theme')
-                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#231b47'")
+                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#202020'")
                     page.click('#btn-theme')
-                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#fff8fc'")
+                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#fffdf7'")
                     page.evaluate("scrollTo(0, 0)")
                     page.wait_for_function("!document.querySelector('#toast').classList.contains('show')")
                     page.wait_for_timeout(250)

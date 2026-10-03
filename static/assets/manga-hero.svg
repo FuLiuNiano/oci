@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400" viewBox="0 0 800 400" role="img" aria-label="云朵与闪电的原创漫画插画">
+<defs><pattern id="dots" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.3" fill="#000" opacity=".13"/></pattern></defs>
+<path fill="#fffdf7" d="M0 0h800v400H0z"/><path fill="url(#dots)" d="M0 0h800v400H0z"/>
+<g stroke="#000" fill="none" stroke-width="4"><path d="m0 0 242 126M0 100l220 55M0 300l220-53M0 400l233-120M800 0 564 130M800 98l-218 64M800 296l-218-54M800 400 560 273M120 0l190 119M680 0 491 117M114 400l195-117M680 400 484 284"/></g>
+<path d="m282 103 50 29 18-69 56 51 51-59 24 72 80-19-28 69 62 37-71 40 15 65-77-15-28 70-49-55-63 45-14-71-76 4 32-68-58-37 70-29Z" fill="#f0c84b" stroke="#000" stroke-width="5"/>
+<path d="M283 254h234q48-2 48-48 0-43-42-47-3-66-64-70-52-4-75 43-54-21-78 25-41-2-53 31-15 54 30 66Z" fill="#fffdf7" stroke="#000" stroke-width="6"/>
+<path d="m410 158-39 63h39l-17 68 70-90h-42l20-41Z" fill="#e32938" stroke="#000" stroke-width="4"/>
+<g fill="#000"><circle cx="112" cy="196" r="5"/><circle cx="691" cy="206" r="5"/><path d="m185 57 8 17 18 7-18 7-8 18-7-18-18-7 18-7ZM615 307l6 14 16 6-16 6-6 15-6-15-14-6 14-6Z"/></g>
+</svg>

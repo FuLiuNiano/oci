@@ -138,3 +138,28 @@ python selfcheck.py --full
 ## 其他启动方式
 
 Python 3.12：`python -m pip install -r requirements.txt` 后执行 `python main.py`。Linux 上也可使用 `bash install.sh` 安装 systemd 服务。推荐已有 Docker 的服务器使用上面的 Compose 部署。
+
+## 漫画分镜主题
+
+当前面板使用本地漫画主题：`static/manga.css` 负责面板适配，`static/manga-layout.css` 提供通用分镜和对话气泡样式。重点区域全宽显示，会话和概览卡片使用不同宽度的 CSS Grid 分镜；边框为 3px 黑色实线，桌面悬停轻微旋转，手机自动单列。终端不旋转，支持浅色、深色和减少动态效果设置。图片素材是本地原创 SVG，没有外部字体或图片请求。
+
+`ui-components/MangaLayout.jsx` 提供可选 React 组件 `MangaLayout`、`MangaGrid`、`MangaPanel`、`SpeechBubble`，默认导出完整示例。现有 Python/HTML 面板运行时无需 Node 或 React，也不改变账号、SSH、SFTP 和代理处理方式。
+
+在支持 JSX 和 CSS 导入的 React 工程中使用：
+
+```jsx
+import { MangaLayout, MangaGrid, MangaPanel, SpeechBubble } from "./ui-components/MangaLayout.jsx";
+
+<MangaLayout>
+  <MangaGrid>
+    <MangaPanel span="full" caption="关键情节">全宽内容</MangaPanel>
+  </MangaGrid>
+  <MangaGrid columns={3}>
+    <MangaPanel><SpeechBubble speaker="系统">连接已准备好。</SpeechBubble></MangaPanel>
+    <MangaPanel><SpeechBubble tail="right">继续下一格。</SpeechBubble></MangaPanel>
+    <MangaPanel image={{ src: "/static/assets/manga-hero.svg", alt: "云朵与闪电的漫画插画", width: 800, height: 400 }}>图片和文字可以同框。</MangaPanel>
+  </MangaGrid>
+</MangaLayout>
+```
+
+`columns` 支持 2 或 3；不指定时可混排 `regular`、`wide`、`feature`、`full` 面板。`tall` 可跨两行，`stable` 可关闭该面板的悬停旋转。保留 `static/manga-layout.css` 与组件的相对目录，或按自己的工程调整 CSS 导入路径。

@@ -6,11 +6,10 @@
 <title>OCI Panel · 自托管甲骨文云管理面板</title>
 <link rel="stylesheet" href="/static/vendor/xterm.css">
 <link rel="stylesheet" href="/static/style.css">
-<link rel="stylesheet" href="/static/anime.css">
+<link rel="stylesheet" href="/static/manga-layout.css">
+<link rel="stylesheet" href="/static/manga.css">
 </head>
 <body>
-<div data-anime hidden class="bg-fx" aria-hidden="true"><i class="blob b1"></i><i class="blob b2"></i><i class="blob b3"></i><span class="star s1">✦</span><span class="star s2">✧</span><span class="star s3">✦</span><canvas id="petals"></canvas></div>
-
 <header>
   <div class="brand"><span class="brand-mark">O</span> OCI Panel <span class="muted" id="ver" style="font-size:12px"></span></div>
   <div id="host-metrics" class="host-metrics hide" aria-live="off" title="部署面板的服务器，每 3 秒刷新">
@@ -27,8 +26,8 @@
 
 <div id="view-login" class="login-wrap hide">
   <div class="login-card">
-<img data-anime hidden class="login-character" src="/static/assets/star-happy.svg" alt="原创看板娘星澄" width="208" height="234">
-    <h2>⚡ OCI Panel</h2>
+<img class="manga-login-art" src="/static/assets/manga-hero.svg" alt="云朵与闪电的原创漫画插画" width="800" height="400">
+<h2>⚡ OCI Panel</h2>
     <p class="muted">自托管甲骨文云管理面板</p>
     <input id="login-pass" type="password" placeholder="管理员密码" autocomplete="current-password">
     <button id="btn-login">登 录</button>
@@ -53,8 +52,6 @@
   <button data-view="accounts">云账号</button>
   <button data-view="settings">设置</button>
 </nav>
-<aside data-anime hidden class="character-side" aria-label="主题角色"><div id="character-bubble" role="status">我是星澄，今天也陪你管理云端。</div><button id="character-talk" class="character-talk" title="和星澄打个招呼"><img data-anime hidden class="character" src="/static/assets/star-happy.svg" alt="原创看板娘星澄" width="128" height="144"></button><button id="anime-effects" class="ghost" aria-pressed="true">特效：开</button></aside>
-
 <!-- 概览 -->
 <section id="view-overview" class="view">
   <div class="page-heading"><div><span class="eyebrow">WORKSPACE / OVERVIEW</span><h1>云资源总览</h1><p>账号、用量与任务，一处掌握。</p></div><button class="ghost" id="btn-refresh-overview">刷新概览</button></div>
@@ -396,13 +393,12 @@
 </main>
 
 <div id="toast" class="toast"></div>
-<aside data-anime hidden id="character-toast" class="character-dialog" data-mood="happy" aria-hidden="true"><img data-anime hidden class="mood-happy" src="/static/assets/star-happy.svg" alt="原创看板娘星澄" width="72" height="81"><img data-anime hidden class="mood-sad" src="/static/assets/star-sad.svg" alt="原创看板娘星澄" width="72" height="81"><img data-anime hidden class="mood-thinking" src="/static/assets/star-thinking.svg" alt="原创看板娘星澄" width="72" height="81"><div><strong class="dialog-name">星澄 · 云端助手</strong><p id="character-message"></p></div></aside>
 <script src="/static/vendor/xterm.js"></script>
 <script src="/static/vendor/xterm-fit.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/cloud.js"></script>
 <script src="/static/webssh.js"></script>
 <script src="/static/dashboard.js"></script>
-<script src="/static/anime.js"></script>
+
 </body>
 </html>
