@@ -4,7 +4,8 @@ import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import asyncssh
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import cloudflare_service as cf
@@ -874,6 +875,27 @@ def sftp_write(body: SftpWriteBody, _: None = Depends(require_auth)):
     data = (base64.b64decode(body.content_base64) if body.content_base64
             else body.content.encode("utf-8"))
     return _wrap(sshpool.sftp_write, sess, body.path, data)
+
+
+@api.post("/ssh/sftp/upload")
+async def sftp_upload(request: Request, session_id: int, path: str,
+                      _: None = Depends(require_auth)):
+    """Upload a new binary file; an existing remote file is never overwritten."""
+    if not path.startswith("/") or path.endswith("/") or "\\" in path or "\x00" in path \
+            or path.rsplit("/", 1)[-1] in ("", ".", ".."):
+        raise HTTPException(400, "上传路径必须是有效的绝对文件路径")
+    if request.headers.get("content-length", "").isdigit() \
+            and int(request.headers["content-length"]) > 100_000_000:
+        raise HTTPException(413, "文件超过 100 MB 上传限制")
+    sess = _ssh_or_404(session_id)
+    try:
+        return await sshpool.sftp_upload(sess, path, request.stream())
+    except sshpool.SftpUploadTooLarge as e:
+        raise HTTPException(413, str(e)) from e
+    except (sshpool.SftpUploadExists, asyncssh.SFTPFileAlreadyExists) as e:
+        raise HTTPException(409, "远程已有同名文件，请先改名或选择其他文件") from e
+    except (sshpool.SshError, asyncssh.Error, OSError) as e:
+        raise HTTPException(502, f"SFTP 上传失败: {e}") from e
 
 
 class SftpPathBody(BaseModel):

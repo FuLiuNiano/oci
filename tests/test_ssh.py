@@ -71,6 +71,37 @@ def test_real_sftp_list_and_binary_roundtrip(ssh_server):
     sshpool.sftp_delete(ssh_server,"/renamed.dat")
 
 
+def test_sftp_upload_binary_and_duplicate_protection(client, ssh_server, database):
+    sid = store.execute("INSERT INTO ssh_sessions(name,host,port,username,secret) VALUES(?,?,?,?,?)",
+        ("upload", ssh_server["host"], ssh_server["port"], "test", "test-password"))
+    endpoint = f"/api/ssh/sftp/upload?session_id={sid}&path=/folder/upload.bin"
+    data = bytes(range(256)) * 400
+    response = client.post(endpoint, content=data,
+                           headers={"Content-Type": "application/octet-stream"})
+    assert response.status_code == 200, response.text
+    assert response.json()["size"] == len(data)
+    assert (database / "folder" / "upload.bin").read_bytes() == data
+    duplicate = client.post(endpoint, content=b"changed")
+    assert duplicate.status_code == 409
+    assert (database / "folder" / "upload.bin").read_bytes() == data
+    invalid = client.post(f"/api/ssh/sftp/upload?session_id={sid}&path=relative.bin",
+                          content=b"bad")
+    assert invalid.status_code == 400
+
+
+def test_sftp_upload_limit_removes_partial_file(client, ssh_server, database, monkeypatch):
+    original = sshpool.sftp_upload
+    async def small_limit(sess, path, chunks):
+        return await original(sess, path, chunks, max_bytes=4)
+    monkeypatch.setattr(sshpool, "sftp_upload", small_limit)
+    sid = store.execute("INSERT INTO ssh_sessions(name,host,port,username,secret) VALUES(?,?,?,?,?)",
+        ("upload", ssh_server["host"], ssh_server["port"], "test", "test-password"))
+    response = client.post(f"/api/ssh/sftp/upload?session_id={sid}&path=/too-big.bin",
+                           content=b"12345")
+    assert response.status_code == 413
+    assert not (database / "too-big.bin").exists()
+
+
 def test_real_forward_stays_alive_after_create(ssh_server):
     async def echo(reader,writer):
         writer.write(await reader.read(20))

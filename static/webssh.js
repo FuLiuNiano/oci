@@ -467,6 +467,34 @@
       sftpList();
     } catch (e) { toast(e.message, false); }
   });
+  $("#btn-sftp-upload").addEventListener("click", () => $("#sftp-upload-input").click());
+  $("#sftp-upload-input").addEventListener("change", async (event) => {
+    const files = Array.from(event.target.files || []);
+    const button = $("#btn-sftp-upload");
+    const sid = sftpSid;
+    const directory = sftpPath;
+    button.disabled = true;
+    try {
+      for (const file of files) {
+        if (file.size > 100_000_000) throw new Error(`${file.name} 超过 100 MB 上传限制`);
+        const path = directory.replace(/\/$/, "") + "/" + file.name;
+        button.textContent = `上传中：${file.name}`;
+        const response = await fetch(`/api/ssh/sftp/upload?session_id=${sid}&path=${encodeURIComponent(path)}`,
+          {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: file});
+        let result = {};
+        try { result = await response.json(); } catch {}
+        if (response.status === 401) showLogin();
+        if (!response.ok) throw new Error(result.detail || `${file.name} 上传失败`);
+        toast(`${file.name} 上传成功`);
+      }
+      if (sid === sftpSid && directory === sftpPath) await sftpList();
+    } catch (error) { toast(error.message, false); }
+    finally {
+      button.disabled = false;
+      button.textContent = "上传文件";
+      event.target.value = "";
+    }
+  });
   $("#btn-sftp-save").addEventListener("click", async () => {
     try {
       await api("/api/ssh/sftp/write", { method: "POST", body: {

@@ -259,6 +259,44 @@ def sftp_write(sess, path, content: bytes):
     return _sftp_call(sess, op)
 
 
+class SftpUploadTooLarge(SshError):
+    pass
+
+
+class SftpUploadExists(SshError):
+    pass
+
+
+async def sftp_upload(sess, path, chunks, max_bytes=100_000_000):
+    """Stream a new file to the remote host without buffering it on the panel."""
+    conn = await _connect(sess)
+    try:
+        async with conn.start_sftp_client() as sftp:
+            if await sftp.exists(path):
+                raise SftpUploadExists("远程已有同名文件，请先改名或选择其他文件")
+            created = False
+            size = 0
+            try:
+                async with sftp.open(path, "xb") as remote:
+                    created = True
+                    async for chunk in chunks:
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise SftpUploadTooLarge(f"文件超过 {max_bytes // 1_000_000} MB 上传限制")
+                        if chunk:
+                            await remote.write(chunk)
+            except BaseException:
+                if created:
+                    try:
+                        await sftp.remove(path)
+                    except (asyncssh.Error, OSError):
+                        pass
+                raise
+            return {"ok": True, "size": size}
+    finally:
+        conn.close()
+
+
 def sftp_mkdir(sess, path):
     async def op(sftp):
         await sftp.mkdir(path)
