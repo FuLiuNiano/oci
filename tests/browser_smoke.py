@@ -40,10 +40,13 @@ def main():
                 with sync_playwright() as p:
                     browser = p.chromium.launch(channel="chrome", headless=True)
                     page = browser.new_page(viewport={"width":1440, "height":1000})
+                    terminal_input = []
                     def ssh_transport(ws):
                         def response(message):
                             if str(message).startswith('{"resize"'):
                                 ws.send("Demo terminal\r\n中文 https://example.com/test\r\n$ ")
+                            else:
+                                terminal_input.append(message)
                         ws.on_message(response)
                     page.route_web_socket(re.compile(r"/ws/ssh\?"), ssh_transport)
                     errors = []
@@ -168,6 +171,20 @@ def main():
                     page.locator('.term-holder:visible .xterm-screen').click(button="right", position={"x":20,"y":10})
                     page.wait_for_function("navigator.clipboard.readText().then(s => s === 'Demo')")
                     assert page.evaluate("window.__testTerminals[0].getSelection()") == "Demo"
+                    assert not terminal_input, "Copy must not send terminal input"
+                    page.evaluate("window.__testTerminals[0].clearSelection()")
+                    page.evaluate("navigator.clipboard.writeText('paste-example')")
+                    page.locator('.term-holder:visible .xterm-screen').click(button="right", position={"x":30,"y":140})
+                    page.wait_for_timeout(200)
+                    assert terminal_input == ['paste-example'], terminal_input
+                    page.evaluate("""() => {
+                        window.__clipboardRead = navigator.clipboard.readText;
+                        navigator.clipboard.readText = () => Promise.reject(new DOMException('Denied', 'NotAllowedError'));
+                    }""")
+                    page.locator('.term-holder:visible .xterm-screen').click(button="right", position={"x":30,"y":140})
+                    page.wait_for_function("document.querySelector('#toast').textContent.includes('Ctrl+V')")
+                    assert terminal_input == ['paste-example'], "Denied paste must not send input"
+                    page.evaluate("() => { navigator.clipboard.readText = window.__clipboardRead; }")
                     page.context.route("https://example.com/**", lambda route:route.fulfill(body="<title>Test link</title>"))
                     target = page.evaluate("""() => {
                         const t = window.__testTerminals[0];

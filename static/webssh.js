@@ -25,6 +25,23 @@
     }
     toast("已复制选中文字");
   }
+  async function pasteClipboard(sid, term) {
+    if (terminals[sid]?.ws.readyState !== WebSocket.OPEN) {
+      toast("终端未连接，无法粘贴", false); return;
+    }
+    let text;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      term.focus();
+      toast("浏览器不允许读取剪贴板，请允许剪贴板权限，或按 Ctrl+V 粘贴", false);
+      return;
+    }
+    if (terminals[sid]?.term !== term || terminals[sid].ws.readyState !== WebSocket.OPEN) return;
+    if (!text) { toast("剪贴板中没有文字", false); return; }
+    term.focus();
+    term.paste(text); // Keep xterm's bracketed-paste handling; never append Enter.
+  }
   // Public xterm buffer API: map URL offsets to real cells, including CJK and wrapped lines.
   function activateTerminalLink(event, text) {
     if (!event.ctrlKey || event.button !== 0) return;
@@ -258,10 +275,12 @@
       linkHandler: {activate: activateTerminalLink} });
     term.registerLinkProvider(terminalLinks(term));
     holder.addEventListener("mousedown", ev => {
-      if (ev.button === 2 && term.hasSelection()) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+      if (ev.button === 2) { ev.preventDefault(); ev.stopImmediatePropagation(); }
     }, true);
     holder.addEventListener("contextmenu", ev => {
-      if (term.hasSelection()) { ev.preventDefault(); ev.stopImmediatePropagation(); copySelection(term); }
+      ev.preventDefault(); ev.stopImmediatePropagation();
+      if (term.hasSelection()) copySelection(term);
+      else pasteClipboard(sid, term);
     }, true);
     term.attachCustomKeyEventHandler(ev => {
       if (ev.type === "keydown" && ev.ctrlKey && ev.shiftKey && ev.code === "KeyC") {
