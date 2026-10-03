@@ -8,8 +8,8 @@
   const connectionStates = new Map();
   function terminalTheme() {
     return document.documentElement.dataset.theme === "dark"
-      ? {background: "#192231", foreground: "#dfebfa", cursor: "#66a3ff", selectionBackground: "#35669e80"}
-      : {background: "#f6f8fc", foreground: "#172b4d", cursor: "#267cf7", selectionBackground: "#267cf740"};
+      ? {background: "#231b47", foreground: "#f3ebff", cursor: "#ff6fa5", selectionBackground: "#b79bff55"}
+      : {background: "#fff8fc", foreground: "#4a3358", cursor: "#ff6fa5", selectionBackground: "#ff6fa540"};
   }
   async function copySelection(term) {
     const text = term.getSelection();

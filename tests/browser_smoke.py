@@ -145,6 +145,7 @@ def main():
                         assert response.ok
                     page.click('nav button[data-view="ssh"]')
                     page.wait_for_function("document.querySelectorAll('.session-card').length === 3")
+                    page.wait_for_function("document.querySelector('#view-ssh').getAnimations({subtree:true}).filter(a => a.effect.getComputedTiming().iterations !== Infinity).every(a => a.playState !== 'running')")
                     page.screenshot(path=str(preview / "sessions.png"), full_page=True)
                     page.fill('#session-search', 'Development')
                     assert page.locator('.session-card').count() == 1
@@ -163,6 +164,7 @@ def main():
                     }""")
                     page.locator('[data-sopen]').first.click()
                     page.locator('#term-area').wait_for(state="visible")
+                    page.wait_for_function("document.querySelector('#view-ssh').getAnimations({subtree:true}).filter(a => a.effect.getComputedTiming().iterations !== Infinity).every(a => a.playState !== 'running')")
                     assert not errors, errors
                     page.wait_for_function("window.__testTerminals[0].buffer.active.getLine(0).translateToString().includes('Demo')", timeout=5000)
                     assert page.evaluate("document.querySelector('#view-ssh').firstElementChild.id") == "term-area"
@@ -209,9 +211,9 @@ def main():
                     page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
                     assert page.evaluate("document.querySelector('#sftp-panel').parentElement.id") == "term-area"
                     page.click('#btn-theme')
-                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#192231'")
+                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#231b47'")
                     page.click('#btn-theme')
-                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#f6f8fc'")
+                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#fff8fc'")
                     page.evaluate("scrollTo(0, 0)")
                     page.wait_for_function("!document.querySelector('#toast').classList.contains('show')")
                     page.wait_for_timeout(250)
