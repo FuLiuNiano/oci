@@ -6,6 +6,82 @@
   let sftpPath = "/";
   let editingSessionId = null;
   const connectionStates = new Map();
+  function terminalTheme() {
+    return document.documentElement.dataset.theme === "dark"
+      ? {background: "#192231", foreground: "#dfebfa", cursor: "#66a3ff", selectionBackground: "#35669e80"}
+      : {background: "#f6f8fc", foreground: "#172b4d", cursor: "#267cf7", selectionBackground: "#267cf740"};
+  }
+  async function copySelection(term) {
+    const text = term.getSelection();
+    if (!text) { toast("先选中需要复制的文字", false); return; }
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const input = document.createElement("textarea");
+      input.value = text; input.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.appendChild(input); input.select();
+      const copied = document.execCommand("copy"); input.remove(); term.focus();
+      if (!copied) { toast("复制失败，请使用 Ctrl+Shift+C", false); return; }
+    }
+    toast("已复制选中文字");
+  }
+  // Public xterm buffer API: map URL offsets to real cells, including CJK and wrapped lines.
+  function activateTerminalLink(event, text) {
+    if (!event.ctrlKey || event.button !== 0) return;
+    try {
+      const url = new URL(text);
+      if (!["http:", "https:"].includes(url.protocol)) return;
+      event.preventDefault(); window.open(url.href, "_blank", "noopener,noreferrer");
+    } catch { /* Only complete HTTP(S) links can be opened. */ }
+  }
+  function terminalLinks(term) {
+    return {provideLinks(y, callback) {
+      const buffer = term.buffer.active;
+      let first = y - 1, last = y - 1;
+      while (first > 0 && buffer.getLine(first)?.isWrapped && y - first < 20) first--;
+      while (last + 1 < buffer.length && buffer.getLine(last + 1)?.isWrapped && last - y < 20) last++;
+      let text = ""; const cells = [];
+      for (let row = first; row <= last; row++) {
+        const line = buffer.getLine(row);
+        if (!line) continue;
+        for (let col = 0; col < line.length; col++) {
+          const cell = line.getCell(col);
+          if (!cell || cell.getWidth() === 0) continue;
+          const chars = cell.getChars() || " ";
+          text += chars;
+          for (let i = 0; i < chars.length; i++) cells.push({x: col + 1, y: row + 1, width: cell.getWidth()});
+        }
+      }
+      const links = [];
+      for (const match of text.matchAll(/https?:\/\/[^\s<>"'`]+/g)) {
+        let url = match[0].replace(/[.,;!?:]+$/, "");
+        for (const [close, open] of [[")", "("], ["]", "["], ["}", "{"]]) {
+          while (url.endsWith(close) && url.split(close).length > url.split(open).length) url = url.slice(0, -1);
+        }
+        try { new URL(url); } catch { continue; }
+        const start = cells[match.index], end = cells[match.index + url.length - 1];
+        if (!start || !end || y < start.y || y > end.y) continue;
+        links.push({text: url, range: {start: {x: start.x, y: start.y}, end: {x: end.x + end.width - 1, y: end.y}},
+          activate(event) { activateTerminalLink(event, url); }});
+      }
+      callback(links);
+    }};
+  }
+  const themeObserver = new MutationObserver(() => {
+    for (const t of Object.values(terminals)) t.term.options.theme = terminalTheme();
+  });
+  themeObserver.observe(document.documentElement, {attributes: true, attributeFilter: ["data-theme"]});
+  $("#btn-term-copy").addEventListener("click", () => { if (terminals[activeSid]) copySelection(terminals[activeSid].term); });
+  $("#btn-term-clear").addEventListener("click", () => { if (terminals[activeSid]) terminals[activeSid].term.clear(); });
+  $("#btn-term-bottom").addEventListener("click", () => { if (terminals[activeSid]) terminals[activeSid].term.scrollToBottom(); });
+  $("#btn-term-sftp").addEventListener("click", () => { if (activeSid != null) openSftp(activeSid); });
+  $("#btn-term-fullscreen").addEventListener("click", () => {
+    $("#term-area").classList.toggle("terminal-fullscreen");
+    $("#btn-term-fullscreen").textContent = $("#term-area").classList.contains("terminal-fullscreen") ? "还原" : "全屏";
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") { $("#term-area").classList.remove("terminal-fullscreen"); $("#btn-term-fullscreen").textContent = "全屏"; }
+  });
   $("#session-search").addEventListener("input", renderSessionCards);
 
   async function loadSessions() {
@@ -159,8 +235,9 @@
     }
 
     const tabBtn = document.createElement("button");
-    tabBtn.textContent = sess.name;
+    tabBtn.innerHTML = '<i class="terminal-status-dot"></i><span>' + esc(sess.name) + '</span>';
     tabBtn.dataset.tsid = sid;
+    tabBtn.setAttribute("role", "tab");
     tabBtn.addEventListener("click", () => activateTab(sid));
     $("#term-tabs").appendChild(tabBtn);
     const closeBtn = document.createElement("button");
@@ -174,10 +251,24 @@
     const holder = document.createElement("div");
     holder.className = "term-holder hide";
     holder.id = "term-" + sid;
-    holder.style.height = "480px";
     $("#term-stack").appendChild(holder);
 
-    const term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: "#0e1220" } });
+    const term = new Terminal({ cursorBlink: true, fontSize: 14,
+      fontFamily: '"Cascadia Mono", Consolas, "Liberation Mono", monospace', theme: terminalTheme(),
+      linkHandler: {activate: activateTerminalLink} });
+    term.registerLinkProvider(terminalLinks(term));
+    holder.addEventListener("mousedown", ev => {
+      if (ev.button === 2 && term.hasSelection()) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+    }, true);
+    holder.addEventListener("contextmenu", ev => {
+      if (term.hasSelection()) { ev.preventDefault(); ev.stopImmediatePropagation(); copySelection(term); }
+    }, true);
+    term.attachCustomKeyEventHandler(ev => {
+      if (ev.type === "keydown" && ev.ctrlKey && ev.shiftKey && ev.code === "KeyC") {
+        ev.preventDefault(); copySelection(term); return false;
+      }
+      return true;
+    });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(holder);
@@ -189,10 +280,14 @@
       fit.fit(); term.focus();
       ws.send(JSON.stringify({resize: {cols: term.cols, rows: term.rows}}));
       connectionStates.set(sid, "已连接"); renderSessionCards();
+      tabBtn.classList.add("connected");
+      if (activeSid === sid) $("#term-connection-status").textContent = "已连接 · " + sess.name;
     };
     ws.onmessage = ev => term.write(ev.data);
     ws.onclose = ev => {
       connectionStates.set(sid, "已断开"); renderSessionCards();
+      tabBtn.classList.remove("connected");
+      if (activeSid === sid) $("#term-connection-status").textContent = "已断开 · " + sess.name;
       if (!terminals[sid] || terminals[sid].ws !== ws) return;
       term.write(ev.code === 4401 ? "\r\n\r\n[未登录]" : "\r\n\r\n[连接已断开，点击 × 关闭，或点击终端重新连接]");
     };
@@ -217,9 +312,12 @@
     });
     const resize = () => { if (sid === activeSid) fit.fit(); };
     window.addEventListener("resize", resize);
+    const sizeObserver = new ResizeObserver(() => { if (sid === activeSid && holder.clientWidth) fit.fit(); });
+    sizeObserver.observe(holder);
 
-    terminals[sid] = { term, ws, fit, tabBtn, holder, closeBtn, resize };
+    terminals[sid] = { term, ws, fit, tabBtn, holder, closeBtn, resize, sizeObserver };
     activateTab(sid);
+    $("#term-area").scrollIntoView({block: "start", behavior: "smooth"});
   }
 
   function activateTab(sid) {
@@ -227,9 +325,11 @@
     for (const [k, t] of Object.entries(terminals)) {
       t.holder.classList.toggle("hide", String(k) !== String(sid));
       t.tabBtn.classList.toggle("active", String(k) === String(sid));
+      t.tabBtn.setAttribute("aria-selected", String(String(k) === String(sid)));
     }
     const t = terminals[sid];
     if (t) { t.fit.fit(); t.term.focus(); }
+    if (t) $("#term-connection-status").textContent = (t.ws.readyState === 1 ? "已连接" : t.ws.readyState === 0 ? "连接中…" : "已断开") + " · " + state.sessions.find(s => s.id === sid)?.name;
   }
 
   function closeTerminal(sid) {
@@ -238,6 +338,7 @@
     t.ws.onclose = null;
     try { t.ws.close(); t.term.dispose(); } catch {}
     window.removeEventListener("resize", t.resize);
+    t.sizeObserver.disconnect();
     t.holder.remove();
     t.tabBtn.remove();
     t.closeBtn.remove();
@@ -248,16 +349,24 @@
       activeSid = next ? Number(next) : null;
       if (next) activateTab(Number(next));
     }
-    if (!Object.keys(terminals).length) $("#term-area").classList.add("hide");
+    if (!Object.keys(terminals).length) {
+      $("#term-area").classList.add("hide");
+      $("#term-area").classList.remove("terminal-fullscreen");
+      $("#btn-term-fullscreen").textContent = "全屏";
+      $("#view-ssh").appendChild($("#sftp-panel"));
+    }
     renderSessionCards();
   }
 
   /* ---- SFTP ---- */
+  $("#btn-sftp-close").addEventListener("click", () => $("#sftp-panel").classList.add("hide"));
   function openSftp(sid) {
     sftpSid = sid;
     const sess = state.sessions.find(x => x.id === sid);
     $("#sftp-sess").textContent = sess ? `${sess.name} (${sess.host})` : sid;
     $("#sftp-panel").classList.remove("hide");
+    if (terminals[sid]) $("#term-area").appendChild($("#sftp-panel"));
+    else $("#view-ssh").appendChild($("#sftp-panel"));
     sftpPath = "/";
     sftpList();
   }

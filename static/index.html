@@ -35,7 +35,8 @@
 
 <main id="app" class="hide">
 <nav>
-  <button data-view="overview" class="active">概览</button>
+  <button data-view="ssh" class="active">SSH 终端</button>
+  <button data-view="overview">概览</button>
   <button data-view="instances">实例</button>
   <button data-view="diagnostics">配置体检</button>
   <button data-view="cloudmonitor">云监控</button>
@@ -45,7 +46,6 @@
   <button data-view="users">用户管理</button>
   <button data-view="objects">对象存储</button>
   <button data-view="domains">域名监控</button>
-  <button data-view="ssh">SSH 终端</button>
   <button data-view="mail">邮件服务</button>
   <button data-view="accounts">云账号</button>
   <button data-view="settings">设置</button>
@@ -235,6 +235,12 @@
 
 <!-- SSH 终端 -->
 <section id="view-ssh" class="view">
+  <div id="term-area" class="terminal-workspace hide">
+    <div class="terminal-header"><div id="term-tabs" role="tablist" aria-label="终端会话"></div><div class="terminal-actions"><button id="btn-term-sftp" class="ghost">SFTP</button><button id="btn-term-fullscreen" class="ghost">全屏</button></div></div>
+    <div class="terminal-toolbar"><div><button id="btn-term-copy" class="ghost" title="复制选中的终端文字">复制</button><button id="btn-term-clear" class="ghost" title="仅清除终端显示，不执行远程命令">清屏</button><button id="btn-term-bottom" class="ghost">回到底部</button></div><span id="term-connection-status" class="connection-status">未连接</span></div>
+    <div id="term-stack"></div>
+    <div class="terminal-hint">选中文字后右键复制 · Ctrl＋左键在本机浏览器打开链接 · Ctrl+V 粘贴文字或截图</div>
+  </div>
   <div class="page-heading"><div><span class="eyebrow">WORKSPACE / CONNECTIONS</span><h1>SSH 工作台</h1><p>安全连接你的服务器，管理终端、文件与转发。</p></div></div>
   <div class="bar"><button id="btn-ssh-new">＋ 添加会话</button>
     <button id="btn-ssh-sync" class="ghost">从云主机同步</button>
@@ -265,12 +271,6 @@
     <div class="bar" style="margin-top:10px"><button id="btn-ssh-save">保存</button>
       <button id="btn-ssh-cancel" class="ghost">取消</button></div></div>
 
-  <div id="term-area" class="hide">
-    <div class="bar" id="term-tabs"></div>
-    <div id="term-stack"></div>
-    <div class="bar"><span class="muted">支持 Ctrl+V 粘贴截图（自动上传到 /tmp 并显示路径）</span></div>
-  </div>
-
   <div id="ssh-batch" class="card hide"><h3 class="sec" style="margin-top:0">批量命令</h3>
     <div id="batch-sessions" class="chips"></div>
     <textarea id="batch-cmd" rows="2" placeholder="要同时执行的命令" style="margin-top:8px"></textarea>
@@ -293,14 +293,14 @@
     <div class="bar"><select id="mon-session"></select><button id="btn-mon-load">采集一次</button></div>
     <div id="mon-bars" class="chips"></div></div>
 
-  <div id="sftp-panel" class="card hide"><h3 class="sec" style="margin-top:0">SFTP 文件管理 — <span id="sftp-sess"></span></h3>
+  <div id="sftp-panel" class="card hide"><div class="section-heading"><h3 class="sec" style="margin-top:0">SFTP 文件管理 — <span id="sftp-sess"></span></h3><button id="btn-sftp-close" class="ghost" aria-label="关闭 SFTP">×</button></div>
     <div class="bar"><span id="sftp-path" class="muted"></span>
       <input id="sftp-newname" placeholder="新目录/文件名" style="width:180px">
       <button id="btn-sftp-mkdir" class="ghost">建目录</button></div>
     <div class="table-wrap"><table id="sftp-table">
       <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead><tbody></tbody></table></div>
     <pre id="sftp-edit" class="logbox hide" contenteditable="true"></pre>
-    <div class="bar" id="sftp-editbar" class="hide"><button id="btn-sftp-save">保存文件</button></div></div>
+    <div class="bar hide" id="sftp-editbar"><button id="btn-sftp-save">保存文件</button></div></div>
 </section>
 
 <!-- 邮件服务 -->

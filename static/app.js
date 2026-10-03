@@ -71,7 +71,7 @@ function showLogin() {
 
 async function boot() {
   try { await api("/api/me"); } catch { return; }
-  switchView("overview");
+  switchView("ssh");
   $("#view-login").classList.add("hide");
   $("#app").classList.remove("hide");
   $("#hdr-user").classList.remove("hide");

@@ -1,6 +1,7 @@
 """Optional real-Chrome UI smoke test; OCI replies are explicitly simulated."""
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
@@ -39,11 +40,19 @@ def main():
                 with sync_playwright() as p:
                     browser = p.chromium.launch(channel="chrome", headless=True)
                     page = browser.new_page(viewport={"width":1440, "height":1000})
+                    def ssh_transport(ws):
+                        def response(message):
+                            if str(message).startswith('{"resize"'):
+                                ws.send("Demo terminal\r\n中文 https://example.com/test\r\n$ ")
+                        ws.on_message(response)
+                    page.route_web_socket(re.compile(r"/ws/ssh\?"), ssh_transport)
                     errors = []
                     page.on("pageerror", lambda error:errors.append(str(error)))
                     def replies(route):
                         path = route.request.url.split(base)[-1].split("?")[0]
-                        if path == "/api/panel/metrics":
+                        if path == "/api/ssh/sftp/list":
+                            data = {"data":[{"name":"demo.txt","dir":False,"size":256,"mtime":0}]}
+                        elif path == "/api/panel/metrics":
                             data = {"available":True,"scope":"host","cpu":11,"cores":1,
                                     "memory_used":500*1024**2,"memory_total":1024**3,"memory_percent":49,
                                     "network_rx":7600,"network_tx":4800,"app_memory":54*1024**2,
@@ -142,9 +151,60 @@ def main():
                     assert page.locator('.session-card').count() == 4
                     assert 'synthetic-browser-only' not in page.content()
                     # Exercise actual xterm/close UI; only the remote SSH transport is simulated.
-                    page.route_web_socket("**/ws/ssh?*", lambda ws:ws.send("Demo terminal\r\n$ "))
+                    page.evaluate("""() => {
+                        const Base = window.Terminal;
+                        window.__testTerminals = [];
+                        window.Terminal = class extends Base {
+                            constructor(options) { super(options); window.__testTerminals.push(this); }
+                        };
+                    }""")
                     page.locator('[data-sopen]').first.click()
                     page.locator('#term-area').wait_for(state="visible")
+                    assert not errors, errors
+                    page.wait_for_function("window.__testTerminals[0].buffer.active.getLine(0).translateToString().includes('Demo')", timeout=5000)
+                    assert page.evaluate("document.querySelector('#view-ssh').firstElementChild.id") == "term-area"
+                    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+                    page.evaluate("window.__testTerminals[0].select(0, 0, 4)")
+                    page.locator('.term-holder:visible .xterm-screen').click(button="right", position={"x":20,"y":10})
+                    page.wait_for_function("navigator.clipboard.readText().then(s => s === 'Demo')")
+                    assert page.evaluate("window.__testTerminals[0].getSelection()") == "Demo"
+                    page.context.route("https://example.com/**", lambda route:route.fulfill(body="<title>Test link</title>"))
+                    target = page.evaluate("""() => {
+                        const t = window.__testTerminals[0];
+                        const r = t.element.querySelector('.xterm-screen').getBoundingClientRect();
+                        return {x:r.left + r.width/t.cols*12.5, y:r.top + r.height/t.rows*1.5};
+                    }""")
+                    page.mouse.move(target["x"], target["y"])
+                    page.wait_for_timeout(200)
+                    pages_before = len(page.context.pages)
+                    page.mouse.click(target["x"], target["y"])
+                    assert len(page.context.pages) == pages_before
+                    with page.expect_popup() as opened:
+                        page.keyboard.down("Control")
+                        page.mouse.click(target["x"], target["y"])
+                        page.keyboard.up("Control")
+                    popup = opened.value
+                    popup.wait_for_load_state()
+                    assert popup.url == "https://example.com/test"
+                    assert popup.evaluate("window.opener === null")
+                    popup.close()
+                    page.click('#btn-term-sftp')
+                    page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
+                    assert page.evaluate("document.querySelector('#sftp-panel').parentElement.id") == "term-area"
+                    page.click('#btn-theme')
+                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#192231'")
+                    page.click('#btn-theme')
+                    page.wait_for_function("window.__testTerminals[0].options.theme.background === '#f6f8fc'")
+                    page.evaluate("scrollTo(0, 0)")
+                    page.wait_for_function("!document.querySelector('#toast').classList.contains('show')")
+                    page.wait_for_timeout(250)
+                    page.screenshot(path=str(preview / "terminal.png"), full_page=True)
+                    page.click('#btn-sftp-close')
+                    page.locator('#sftp-panel').wait_for(state="hidden")
+                    page.click('#btn-term-fullscreen')
+                    page.wait_for_function("document.querySelector('#term-area').classList.contains('terminal-fullscreen')")
+                    page.keyboard.press("Escape")
+                    assert not page.locator('.terminal-fullscreen').count()
                     page.locator('.term-close').click()
                     page.locator('#term-area').wait_for(state="hidden")
                     page.locator('[data-sopen]').first.click()
@@ -165,7 +225,7 @@ def main():
                     page.locator("#view-login").wait_for(state="visible")
                     assert not errors, errors
                     browser.close()
-                print("PASS: Chrome login, account edit, cloud cards, diagnostics, session search/copy, terminal close/reopen, mobile layout, theme and password change; cloud replies/SSH transport simulated")
+                print("PASS: Chrome login, cloud cards, diagnostics, sessions, terminal right-click copy, Ctrl-click link, SFTP dock, live theme, fullscreen, close/reopen, mobile layout and password change; cloud/SSH transport simulated")
             finally:
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
