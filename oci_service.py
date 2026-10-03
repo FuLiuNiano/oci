@@ -39,8 +39,9 @@ def compartment_of(acct):
 def _client(cls, acct):
     client = cls(build_config(acct))
     proxy = store.account_params(acct).get("proxy_url", "")
-    if proxy:
-        try:
+    try:
+        required = {}
+        if proxy:
             parsed = urlsplit(proxy)
             if parsed.scheme.lower() not in ("http", "https", "socks5", "socks5h") or not parsed.hostname:
                 raise ValueError("unsupported proxy")
@@ -50,18 +51,18 @@ def _client(cls, acct):
                 raise ValueError("invalid proxy URL")
             if parsed.scheme.lower() == "socks5":
                 proxy = "socks5h" + proxy[proxy.index(":"):]
-            session = client.base_client.session
-            session.trust_env = False
             required = {"http": proxy, "https": proxy}
-            session.proxies = dict(required)
-            original_send = session.send
-            def send_via_required_proxy(request, **kwargs):
-                # Enforce this proxy at the final transport boundary, including redirects.
-                kwargs["proxies"] = dict(required)
-                return original_send(request, **kwargs)
-            session.send = send_via_required_proxy
-        except Exception:
-            raise OciError("代理配置失败，已阻止连接；请检查代理地址与 SOCKS 支持") from None
+        session = client.base_client.session
+        session.trust_env = False
+        session.proxies = dict(required)
+        original_send = session.send
+        def send_via_account_route(request, **kwargs):
+            # Freeze this account's route, including direct mode and redirects.
+            kwargs["proxies"] = dict(required)
+            return original_send(request, **kwargs)
+        session.send = send_via_account_route
+    except Exception:
+        raise OciError("代理配置失败，已阻止连接；请检查代理地址与 SOCKS 支持") from None
     return client
 
 

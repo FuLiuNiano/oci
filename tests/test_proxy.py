@@ -1,7 +1,9 @@
 """Real local SOCKS transport tests; no cloud keys or external servers used."""
 import asyncio
+import json
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -141,6 +143,81 @@ def test_oci_proxy_setup_error_is_not_ignored(account):
     with pytest.raises(oci_service.OciError, match="已阻止连接") as result:
         oci_service._client(lambda _: SimpleNamespace(base_client=SimpleNamespace(session=BrokenSession())), account)
     assert "synthetic-private-error" not in str(result.value)
+
+
+def test_two_oci_accounts_keep_routes_separate(account, socks_proxy, monkeypatch):
+    proxy, destinations, _ = socks_proxy
+    aid = store.execute("INSERT INTO accounts(name,region,params) VALUES(?,?,?)",
+        ("second", account["region"], json.dumps({**account["params"], "proxy_url": proxy})))
+    second = store.query("SELECT * FROM accounts WHERE id=?", (aid,))[0]
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("ALL_PROXY", "socks5h://127.0.0.1:1")
+    monkeypatch.setenv("NO_PROXY", "")
+    hits = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(self.path.encode())
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    direct = oci_service._client(oci.identity.IdentityClient, account).base_client.session
+    proxied = oci_service._client(oci.identity.IdentityClient, second).base_client.session
+    try:
+        assert direct is not proxied
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(direct.get, f"http://127.0.0.1:{server.server_port}/direct",
+                timeout=3, proxies={"http": "http://127.0.0.1:1"})
+            b = pool.submit(proxied.get, f"http://cloud.example.invalid:{server.server_port}/proxy", timeout=3)
+            assert a.result().text == "/direct"
+            assert b.result().text == "/proxy"
+        assert destinations == [("cloud.example.invalid", server.server_port)]
+        assert sorted(hits) == ["/direct", "/proxy"]
+        with socket.socket() as unavailable:
+            unavailable.bind(("127.0.0.1", 0))
+            second["params"]["proxy_url"] = f"socks5://127.0.0.1:{unavailable.getsockname()[1]}"
+            failed = oci_service._client(oci.identity.IdentityClient, second).base_client.session
+            try:
+                with pytest.raises((oci_service.requests.RequestException, sdk_requests.RequestException)):
+                    failed.get(f"http://127.0.0.1:{server.server_port}/must-not-arrive", timeout=2)
+                assert direct.get(f"http://127.0.0.1:{server.server_port}/still-direct", timeout=3).status_code == 200
+                assert "/must-not-arrive" not in hits
+                assert proxied.get(f"http://cloud.example.invalid:{server.server_port}/still-proxy", timeout=3).status_code == 200
+            finally:
+                failed.close()
+    finally:
+        direct.close()
+        proxied.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(3)
+
+
+def test_two_ssh_connections_drop_only_failed_proxy(ssh_server, socks_proxy):
+    proxy, destinations, connections = socks_proxy
+    async def check():
+        direct, proxied = await asyncio.gather(
+            sshpool._connect(ssh_server),
+            sshpool._connect({**ssh_server, "host": "cloud.example.invalid", "proxy_command": proxy}))
+        try:
+            assert (await direct.run("before", check=True)).stdout == "ok\n"
+            assert (await proxied.run("before", check=True)).stdout == "ok\n"
+            attempts = len(destinations)
+            for writer in list(connections):
+                writer.close()
+            await asyncio.wait_for(proxied.wait_closed(), 3)
+            assert not direct.is_closed()
+            assert (await direct.run("after", check=True)).stdout == "ok\n"
+            assert len(destinations) == attempts
+        finally:
+            direct.close()
+            proxied.close()
+            await asyncio.gather(direct.wait_closed(), proxied.wait_closed())
+    sshpool._run(check())
 
 
 def test_real_ssh_socks_proxy_includes_host_key_check(ssh_server, socks_proxy):
