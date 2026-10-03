@@ -782,6 +782,8 @@ def ssh_session_update(session_id: int, body: SshBody, _: None = Depends(require
          body.auth_type, secret, body.proxy_command.strip(), body.tags.strip(),
          1 if body.monitor_cpu else 0, 1 if body.monitor_mem else 0,
          1 if body.monitor_disk else 0, session_id))
+    if (sess["proxy_command"] or "").strip() != body.proxy_command.strip():
+        sshpool.close_session_connections(session_id)
     return {"ok": True}
 
 
@@ -789,6 +791,7 @@ def ssh_session_update(session_id: int, body: SshBody, _: None = Depends(require
 def ssh_session_delete(session_id: int, _: None = Depends(require_auth)):
     _ssh_or_404(session_id)
     store.execute("DELETE FROM ssh_sessions WHERE id=?", (session_id,))
+    sshpool.close_session_connections(session_id)
     return {"ok": True}
 
 

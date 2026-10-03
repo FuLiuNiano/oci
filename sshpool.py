@@ -3,8 +3,12 @@ import asyncio
 import threading
 import time
 import stat
+import shlex
+import weakref
+from urllib.parse import urlsplit, unquote
 
 import asyncssh
+import socks
 
 import store
 
@@ -16,6 +20,17 @@ class SshError(Exception):
 _runtime_lock = threading.Lock()
 _runtime_loop = None
 _runtime_thread = None
+_active_lock = threading.Lock()
+_active_connections = weakref.WeakKeyDictionary()
+
+
+def close_session_connections(session_id):
+    """Close old connections when a saved session's proxy changes, across both loops."""
+    with _active_lock:
+        active = [(conn, loop) for conn, (sid, loop) in _active_connections.items() if sid == session_id]
+    for conn, loop in active:
+        if not loop.is_closed():
+            loop.call_soon_threadsafe(conn.close)
 
 
 def _run(coro):
@@ -49,14 +64,63 @@ def shutdown():
         _runtime_loop = _runtime_thread = None
 
 
+def _socks_proxy(sess):
+    raw = (sess.get("proxy_command") or "").strip()
+    if not raw:
+        return None
+    try:
+        if not raw.lower().startswith(("socks5://", "socks5h://")):
+            # Support the former nc form without executing arbitrary helper commands.
+            parts = shlex.split(raw)
+            if not parts or parts[0] not in ("nc", "netcat") or parts[-2:] != ["%h", "%p"]:
+                raise ValueError("not a SOCKS5 proxy")
+            opts = parts[1:-2]
+            address = None
+            while opts:
+                flag, value, *opts = opts
+                if flag == "-x" and address is None:
+                    address = value
+                elif flag != "-X" or value != "5":
+                    raise ValueError("unsupported proxy option")
+            if not address:
+                raise ValueError("missing proxy address")
+            raw = "socks5h://" + address
+        parsed = urlsplit(raw)
+        if not parsed.hostname or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            raise ValueError("invalid proxy URL")
+        port = parsed.port if parsed.port is not None else 1080
+        if not 1 <= port <= 65535:
+            raise ValueError("invalid proxy port")
+        return {"host": parsed.hostname, "port": port,
+                "username": unquote(parsed.username) if parsed.username is not None else None,
+                "password": unquote(parsed.password) if parsed.password is not None else None}
+    except (ValueError, TypeError):
+        raise SshError("SOCKS5 代理配置无效，已阻止连接；请填 socks5h://地址:端口") from None
+
+
+async def _proxy_socket(sess, proxy):
+    def connect():
+        sock = None
+        try:
+            sock = socks.create_connection((sess["host"], int(sess.get("port") or 22)), timeout=15,
+                proxy_type=socks.SOCKS5, proxy_addr=proxy["host"], proxy_port=proxy["port"],
+                proxy_rdns=True, proxy_username=proxy["username"], proxy_password=proxy["password"])
+            sock.setblocking(False)
+            return sock
+        except Exception:
+            if sock:
+                sock.close()
+            raise SshError("SOCKS5 代理连接失败，已阻止连接，不会改为直连") from None
+    return await asyncio.to_thread(connect)
+
+
 def _connect_args(sess):
     args = dict(
         host=sess["host"], port=int(sess.get("port") or 22),
         username=sess.get("username") or "root",
         connect_timeout=15,
+        keepalive_interval=15, keepalive_count_max=3,
     )
-    if sess.get("proxy_command"):
-        args["proxy_command"] = sess["proxy_command"]
     if sess.get("auth_type") == "key":
         args["client_keys"] = [asyncssh.import_private_key(sess["secret"])]
     else:
@@ -65,22 +129,46 @@ def _connect_args(sess):
 
 
 async def _connect(sess):
+    sock = None
     try:
+        proxy = _socks_proxy(sess)
         key_id = f"ssh_hostkey:{sess['host']}:{int(sess.get('port') or 22)}"
         saved = store.get_setting(key_id)
         if saved:
             key = asyncssh.import_public_key(saved)
         else:
             options = {}
-            if sess.get("proxy_command"):
-                options["proxy_command"] = sess["proxy_command"]
-            key = await asyncio.wait_for(asyncssh.get_server_host_key(
-                sess["host"], int(sess.get("port") or 22), **options), timeout=15)
+            if proxy:
+                sock = await _proxy_socket(sess, proxy)
+                options["sock"] = sock
+            try:
+                key = await asyncio.wait_for(asyncssh.get_server_host_key(
+                    sess["host"], int(sess.get("port") or 22), **options), timeout=15)
+            finally:
+                if sock:
+                    sock.close()
+                    sock = None
             if key is None:
                 raise SshError("无法读取 SSH 主机公钥")
-        conn = await asyncssh.connect(**_connect_args(sess), known_hosts=([key], [], []))
+        args = _connect_args(sess)
+        if proxy:
+            sock = await _proxy_socket(sess, proxy)
+            args["sock"] = sock
+        try:
+            conn = await asyncssh.connect(**args, known_hosts=([key], [], []))
+        except BaseException:
+            if sock:
+                sock.close()
+            raise
         if not saved:
             store.set_setting(key_id, key.export_public_key().decode())
+        if sess.get("id") is not None:
+            with _active_lock:
+                current = store.query("SELECT proxy_command FROM ssh_sessions WHERE id=?", (sess["id"],))
+                if not current or (current[0]["proxy_command"] or "").strip() != (sess.get("proxy_command") or "").strip():
+                    conn.close()
+                    raise SshError("SSH 代理配置已变更，已断开旧连接，请重新打开终端")
+                _active_connections[conn] = (int(sess["id"]), asyncio.get_running_loop())
         return conn
     except asyncssh.Error as e:
         raise SshError(f"SSH 连接失败: {e}")

@@ -218,7 +218,11 @@
     };
     if (!body.name || !body.host) { toast("名称和主机必填", false); return; }
     try {
-      if (editingSessionId) await api(`/api/ssh/sessions/${editingSessionId}`, { method: "PUT", body });
+      if (editingSessionId) {
+        const old = state.sessions.find(s => s.id === editingSessionId);
+        await api(`/api/ssh/sessions/${editingSessionId}`, { method: "PUT", body });
+        if (old && old.proxy_command !== body.proxy_command) closeTerminal(editingSessionId);
+      }
       else await api("/api/ssh/sessions", { method: "POST", body });
       toast("已保存");
       $("#ssh-form").classList.add("hide");

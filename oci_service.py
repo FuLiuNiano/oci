@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import oci
 import store
 import requests
+from urllib.parse import urlsplit
 from oci.exceptions import ServiceError
 
 
@@ -40,9 +41,27 @@ def _client(cls, acct):
     proxy = store.account_params(acct).get("proxy_url", "")
     if proxy:
         try:
-            client.base_client.session.proxies = {"http": proxy, "https": proxy}
+            parsed = urlsplit(proxy)
+            if parsed.scheme.lower() not in ("http", "https", "socks5", "socks5h") or not parsed.hostname:
+                raise ValueError("unsupported proxy")
+            if parsed.port is not None and not 1 <= parsed.port <= 65535:
+                raise ValueError("invalid port")
+            if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+                raise ValueError("invalid proxy URL")
+            if parsed.scheme.lower() == "socks5":
+                proxy = "socks5h" + proxy[proxy.index(":"):]
+            session = client.base_client.session
+            session.trust_env = False
+            required = {"http": proxy, "https": proxy}
+            session.proxies = dict(required)
+            original_send = session.send
+            def send_via_required_proxy(request, **kwargs):
+                # Enforce this proxy at the final transport boundary, including redirects.
+                kwargs["proxies"] = dict(required)
+                return original_send(request, **kwargs)
+            session.send = send_via_required_proxy
         except Exception:
-            pass
+            raise OciError("代理配置失败，已阻止连接；请检查代理地址与 SOCKS 支持") from None
     return client
 
 

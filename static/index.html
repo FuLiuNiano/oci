@@ -259,7 +259,7 @@
       <div><label>用户名</label><input id="ss-user" value="root"></div>
       <div><label>认证方式</label><select id="ss-authtype"><option value="password">密码</option><option value="key">私钥</option></select></div>
       <div><label>标签</label><input id="ss-tags" placeholder="oracle,sg"></div>
-      <div><label>代理命令（可选，如 nc -x 1.2.3.4:1080 %h %p）</label><input id="ss-proxy"></div>
+      <div><label>SOCKS5 代理（可选，失败时禁止直连）</label><input id="ss-proxy" placeholder="socks5h://地址:1080 或 socks5h://用户名:密码@地址:1080"></div>
     </div>
     <label class="muted" style="font-size:12px;display:block;margin:10px 0 3px">密码 或 私钥 PEM（编辑时留空=不改）</label>
     <textarea id="ss-secret" rows="3"></textarea>
@@ -351,7 +351,7 @@
     <div style="margin-top:8px"><label class="muted" style="font-size:12px;display:block;margin-bottom:3px">OCI API 私钥 PEM 全文</label>
       <textarea id="ao-pk" rows="5" class="platform-fields-oci"></textarea></div>
     <div class="form-grid" style="margin-top:10px">
-      <div><label>出站代理（可选，http:// 或 socks5://）</label><input id="a-proxy" placeholder="socks5://127.0.0.1:1080"></div>
+      <div><label>出站代理（可选，失败时禁止直连）</label><input id="a-proxy" placeholder="socks5h://地址:1080"></div>
       <div><label>流量阈值 GB/24h（0=不监控）</label><input id="a-traffic" type="number" value="0"></div>
       <div><label>超阈值动作</label><select id="a-trafficact"><option value="notify">仅通知</option><option value="stop">自动关停实例</option></select></div>
     </div>
