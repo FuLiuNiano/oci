@@ -118,7 +118,7 @@ td{border-bottom:1px solid var(--muted)}
 
 /* Terminal scroll stays inside the workspace, including empty scrollback. */
 html.terminal-scroll-lock,html.terminal-scroll-lock body{overflow:hidden!important;overscroll-behavior:none}
-#term-area,#term-stack,.term-holder,.xterm-viewport{overscroll-behavior:none}
+#term-area .xterm{overscroll-behavior:contain}
 #term-area .xterm-viewport{overscroll-behavior-y:contain}
 .terminal-fullscreen{max-height:100dvh;overflow:hidden}
 .terminal-fullscreen .terminal-header,.terminal-fullscreen .terminal-toolbar,.terminal-fullscreen .terminal-live-metrics,.terminal-fullscreen .terminal-hint{flex-shrink:0}
@@ -134,3 +134,9 @@ html.terminal-scroll-lock,html.terminal-scroll-lock body{overflow:hidden!importa
 
 #sftp-upload-progress.upload-error{color:var(--err)}
 #sftp-upload-progress.upload-error progress{accent-color:var(--err)}
+#sftp-file-list{max-height:360px;overflow:auto;overscroll-behavior:contain;min-height:0}
+#sftp-file-list th{position:sticky;top:0;z-index:1}
+#sftp-path,#sftp-status{overflow-wrap:anywhere}
+#sftp-status:empty{display:none}
+#sftp-status{margin-bottom:10px}
+.terminal-fullscreen #sftp-file-list{max-height:22vh}

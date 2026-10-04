@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from urllib.parse import parse_qs, urlparse
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -65,7 +66,16 @@ def main():
                         elif path == "/api/ssh/sftp/upload":
                             data = {"ok":True,"size":len(route.request.post_data_buffer or b"")}
                         elif path == "/api/ssh/sftp/list":
+                            directory = parse_qs(urlparse(route.request.url).query)["path"][0]
+                            if directory == "/blocked":
+                                route.fulfill(status=502, body="")
+                                return
+                            assert directory in ("/", "/子目录 space"), directory
                             data = {"data":[{"name":"demo.txt","dir":False,"size":256,"mtime":0}]}
+                            if directory == "/":
+                                data["data"] = [dict(name=name, dir=True, size=0, mtime=0)
+                                                for name in ("blocked", "子目录 space")] + data["data"]
+                                data["data"] += [dict(name=f"file-{i}.txt", dir=False, size=1, mtime=0) for i in range(40)]
                         elif path == "/api/panel/metrics":
                             data = {"available":True,"scope":"host","cpu":11,"cores":1,
                                     "memory_used":500*1024**2,"memory_total":1024**3,"memory_percent":49,
@@ -260,6 +270,31 @@ def main():
                     page.click('#btn-term-sftp')
                     page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
                     assert page.evaluate("document.querySelector('#sftp-panel').parentElement.id") == "term-area"
+                    page.locator('#sftp-table [data-fopen="blocked"]').click()
+                    page.wait_for_function("document.querySelector('#sftp-status').textContent.includes('HTTP 502')")
+                    assert page.locator('#sftp-path').inner_text() == '/'
+                    page.locator('#sftp-table [data-fopen="子目录 space"]').click()
+                    page.wait_for_function("document.querySelector('#sftp-path').textContent === '/子目录 space'")
+                    page.click('#btn-sftp-up')
+                    page.wait_for_function("document.querySelector('#sftp-path').textContent === '/'")
+                    page.locator('#sftp-file-list').hover()
+                    page.wait_for_timeout(500)
+                    list_page_scroll = page.evaluate('scrollY')
+                    page.mouse.wheel(0, 500)
+                    page.wait_for_timeout(300)
+                    assert page.locator('#sftp-file-list').evaluate('el => el.scrollTop') > 0
+                    assert abs(page.evaluate('scrollY') - list_page_scroll) < 2
+                    page.locator('#sftp-file-list').evaluate('el => el.scrollTop = el.scrollHeight')
+                    page.mouse.wheel(0, 500)
+                    page.wait_for_timeout(250)
+                    assert abs(page.evaluate('scrollY') - list_page_scroll) < 2
+                    # Terminal toolbar/padding must allow ordinary page scrolling.
+                    page.locator('.terminal-toolbar').hover()
+                    page.wait_for_timeout(300)
+                    outside_scroll = page.evaluate('scrollY')
+                    page.mouse.wheel(0, 300)
+                    page.wait_for_timeout(300)
+                    assert page.evaluate('scrollY') > outside_scroll + 10
                     # Native XHR uploads, then deterministic intermediate progress and error checks.
                     page.locator('#sftp-upload-input').set_input_files({"name":"native.bin","mimeType":"application/octet-stream","buffer":b'abc' * 2048})
                     page.wait_for_function("document.querySelector('#sftp-upload-label').textContent.includes('远程已确认')")
@@ -299,6 +334,15 @@ def main():
                     page.mouse.wheel(0, 3000)
                     page.wait_for_timeout(200)
                     assert page.evaluate('scrollY') == fullscreen_scroll
+                    page.click('#btn-term-sftp')
+                    page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
+                    page.locator('#sftp-file-list').hover()
+                    page.mouse.wheel(0, 400)
+                    page.wait_for_timeout(300)
+                    assert page.locator('#sftp-file-list').evaluate('el => el.scrollTop') > 0
+                    assert page.evaluate('scrollY') == fullscreen_scroll
+                    page.screenshot(path=str(preview / "sftp-fullscreen.png"))
+                    page.click('#btn-sftp-close')
                     page.keyboard.press("Escape")
                     assert page.evaluate("getComputedStyle(document.documentElement).overflow") != 'hidden'
                     assert not page.locator('.terminal-fullscreen').count()
@@ -327,6 +371,19 @@ def main():
                     page.wait_for_timeout(250)  # Allow CSS theme transitions to finish.
                     page.screenshot(path=str(preview / "mobile-dark.png"), full_page=True)
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+                    page.locator('.session-more summary').first.click()
+                    page.locator('[data-ssftp]').first.click()
+                    page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
+                    assert page.locator('#sftp-panel').evaluate('el => el.parentElement.id') == 'ssh-tools-dock'
+                    page.locator('#sftp-file-list').hover()
+                    page.wait_for_timeout(400)
+                    mobile_scroll = page.evaluate('scrollY')
+                    page.mouse.wheel(0, 400)
+                    page.wait_for_timeout(300)
+                    assert page.locator('#sftp-file-list').evaluate('el => el.scrollTop') > 0
+                    assert abs(page.evaluate('scrollY') - mobile_scroll) < 2
+                    page.screenshot(path=str(preview / "sftp-mobile.png"))
+                    page.click('#btn-sftp-close')
                     page.click('nav button[data-view="settings"]')
                     page.wait_for_function("document.querySelector('#cf-settings-state').textContent.includes('Token')")
                     assert page.locator('#mcp-endpoint').inner_text() == base + access_path + 'mcp'

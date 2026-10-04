@@ -66,7 +66,7 @@
     sample();
   }
   $("#term-area").addEventListener("wheel", event => {
-    if (!event.ctrlKey && event.target.closest(".term-holder")) event.preventDefault();
+    if (!event.ctrlKey && event.target.closest(".xterm")) event.preventDefault();
   }, {passive: false});
   new MutationObserver(() => {
     if ($("#view-ssh").classList.contains("hide") || $("#app").classList.contains("hide")) {
@@ -469,7 +469,13 @@
   }
 
   /* ---- SFTP ---- */
-  $("#btn-sftp-close").addEventListener("click", () => $("#sftp-panel").classList.add("hide"));
+  let sftpListRequest = 0;
+  $("#btn-sftp-close").addEventListener("click", () => {
+    ++sftpListRequest;
+    $("#sftp-panel").classList.add("hide");
+  });
+  $("#btn-sftp-up").addEventListener("click", () => sftpList(sftpPath.replace(/\/[^/]+\/?$/, "") || "/"));
+  $("#btn-sftp-refresh").addEventListener("click", () => sftpList());
   function openSftp(sid) {
     sftpSid = sid;
     const sess = state.sessions.find(x => x.id === sid);
@@ -479,13 +485,24 @@
     else $("#ssh-tools-dock").appendChild($("#sftp-panel"));
     $("#sftp-panel").scrollIntoView({block: "nearest", behavior: "smooth"});
     sftpPath = "/";
+    $("#sftp-path").textContent = "/";
+    $("#sftp-table tbody").innerHTML = "";
+    $("#sftp-edit").classList.add("hide");
+    $("#sftp-editbar").classList.add("hide");
     sftpList();
   }
 
-  async function sftpList() {
+  async function sftpList(path = sftpPath) {
+    const request = ++sftpListRequest;
+    const sid = sftpSid;
+    $("#sftp-status").textContent = "正在读取目录…";
+    $("#sftp-status").classList.remove("err");
     try {
-      const r = await api(`/api/ssh/sftp/list?session_id=${sftpSid}&path=${encodeURIComponent(sftpPath)}`);
+      const r = await api(`/api/ssh/sftp/list?session_id=${sid}&path=${encodeURIComponent(path)}`);
+      if (request !== sftpListRequest) return;
+      sftpPath = path;
       $("#sftp-path").textContent = sftpPath;
+      $("#btn-sftp-up").disabled = path === "/";
       $("#sftp-table tbody").innerHTML = r.data.map(f => `<tr>
         <td>${f.dir ? "📁" : "📄"} <a href="javascript:void(0)" data-fopen="${esc(f.name)}" data-fdir="${f.dir}">${esc(f.name)}</a></td>
         <td>${f.dir ? "-" : (f.size / 1024).toFixed(1) + "KB"}</td>
@@ -494,7 +511,15 @@
           <button data-frename="${esc(f.name)}">改名</button>
           <button data-fdel="${esc(f.name)}" data-fisdir="${f.dir}" class="danger">删除</button></td></tr>`).join("")
         || `<tr><td colspan="4" class="muted">空目录</td></tr>`;
-    } catch (e) { toast(e.message, false); }
+      $("#sftp-file-list").scrollTop = 0;
+      $("#sftp-status").textContent = "";
+    } catch (e) {
+      if (request !== sftpListRequest) return;
+      const message = `无法打开目录 ${path}：${e.message}`;
+      $("#sftp-status").textContent = message;
+      $("#sftp-status").classList.add("err");
+      toast(message, false);
+    }
   }
 
   $("#sftp-table tbody").addEventListener("click", async (e) => {
@@ -505,8 +530,7 @@
     try {
       if (link) {
         if (link.dataset.fdir === "true") {
-          sftpPath = sftpPath.replace(/\/$/, "") + "/" + link.dataset.fopen;
-          sftpList();
+          sftpList(sftpPath.replace(/\/$/, "") + "/" + link.dataset.fopen);
         } else downloadFile(link.dataset.fopen);
       } else if (edit) {
         const full = sftpPath.replace(/\/$/, "") + "/" + edit.dataset.fedit;

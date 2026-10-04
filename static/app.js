@@ -46,8 +46,9 @@ async function api(path, opts = {}) {
   let data = {};
   try { data = await res.json(); } catch {}
   if (!res.ok) {
-    const d = data.detail;
-    throw new Error(typeof d === "string" ? d : JSON.stringify(d || res.statusText));
+    const d = data?.detail;
+    const message = typeof d === "string" ? d.trim() : d ? JSON.stringify(d) : "";
+    throw new Error(message || `请求失败（HTTP ${res.status}），请检查服务状态后重试`);
   }
   return data;
 }

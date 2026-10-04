@@ -296,12 +296,14 @@
 
   <div id="sftp-panel" class="card hide"><div class="section-heading"><h3 class="sec" style="margin-top:0">SFTP 文件管理 — <span id="sftp-sess"></span></h3><button id="btn-sftp-close" class="ghost" aria-label="关闭 SFTP">×</button></div>
     <div class="bar"><span id="sftp-path" class="muted"></span>
+      <button id="btn-sftp-up">上一级</button><button id="btn-sftp-refresh">刷新</button>
       <input id="sftp-newname" placeholder="新目录/文件名" style="width:180px">
       <button id="btn-sftp-mkdir" class="ghost">建目录</button>
       <button id="btn-sftp-upload" type="button">上传文件</button>
       <input id="sftp-upload-input" type="file" multiple class="hide" aria-label="选择要上传的文件"></div>
     <div id="sftp-upload-progress" class="hide" role="status"><div id="sftp-upload-label"></div><progress id="sftp-upload-meter" max="100" value="0" aria-label="文件上传进度"></progress></div>
-    <div class="table-wrap"><table id="sftp-table">
+    <div id="sftp-status" role="status"></div>
+    <div id="sftp-file-list" class="table-wrap" tabindex="0" aria-label="SFTP 文件列表"><table id="sftp-table">
       <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead><tbody></tbody></table></div>
     <pre id="sftp-edit" class="logbox hide" contenteditable="true"></pre>
     <div class="bar hide" id="sftp-editbar"><button id="btn-sftp-save">保存文件</button></div></div>
