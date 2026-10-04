@@ -1,5 +1,8 @@
 """全部业务 API 路由（多云账号、OCI 扩展、开机任务、SSH、CF/DNS、域名监控、设置、面板维护）。"""
 import base64
+import hashlib
+import hmac
+import json
 import os
 import time
 from typing import Optional
@@ -19,6 +22,12 @@ import host_monitor
 from deps import require_auth
 
 api = APIRouter(prefix="/api")
+_ssh_revision_key = os.urandom(32)
+
+
+def _ssh_revision(sess):
+    fields = [sess.get(k) for k in ("id", "host", "port", "username", "auth_type", "secret", "proxy_command")]
+    return hmac.new(_ssh_revision_key, json.dumps(fields).encode(), hashlib.sha256).hexdigest()
 
 
 def _account_or_404(account_id: int):
@@ -774,7 +783,7 @@ def ssh_sessions(_: None = Depends(require_auth)):
             metadata = store.json.loads(r.get("metadata") or "{}")
         except (ValueError, TypeError):
             metadata = {}
-        out.append({**r, "metadata": metadata, "secret": "***" if r["secret"] else ""})
+        out.append({**r, "metadata": metadata, "secret": "***" if r["secret"] else "", "connection_revision": _ssh_revision(r)})
     return {"data": out}
 
 
@@ -800,10 +809,12 @@ def ssh_session_add(body: SshBody, _: None = Depends(require_auth)):
     return {"id": sid}
 
 
-def _ssh_or_404(session_id: int):
+def _ssh_or_404(session_id: int, expected_revision=None):
     rows = store.query("SELECT * FROM ssh_sessions WHERE id=?", (session_id,))
     if not rows:
         raise HTTPException(404, "SSH 会话不存在")
+    if expected_revision and (not isinstance(expected_revision, str) or not hmac.compare_digest(expected_revision, _ssh_revision(rows[0]))):
+        raise HTTPException(409, "会话连接配置已变更或服务已重启，请刷新页面重新选择目标")
     return rows[0]
 
 
@@ -818,7 +829,9 @@ def ssh_session_update(session_id: int, body: SshBody, _: None = Depends(require
          body.auth_type, secret, body.proxy_command.strip(), body.tags.strip(),
          1 if body.monitor_cpu else 0, 1 if body.monitor_mem else 0,
          1 if body.monitor_disk else 0, session_id))
-    if (sess["proxy_command"] or "").strip() != body.proxy_command.strip():
+    changed = dict(host=body.host.strip(), port=body.port, username=body.username.strip(),
+                   auth_type=body.auth_type, secret=secret, proxy_command=body.proxy_command.strip())
+    if any((sess.get(field) or "") != (value or "") for field, value in changed.items()):
         sshpool.close_session_connections(session_id)
     return {"ok": True}
 
@@ -849,19 +862,19 @@ def ssh_exec(body: ExecBody, _: None = Depends(require_auth)):
 
 @api.post("/ssh/monitor")
 def ssh_monitor(body: dict, _: None = Depends(require_auth)):
-    sess = _ssh_or_404(body["session_id"])
+    sess = _ssh_or_404(body["session_id"], body.get("expected_revision"))
     return _wrap(sshpool.collect_metrics, sess)
 
 
 @api.get("/ssh/sftp/list")
-def sftp_list(session_id: int, path: str = "/", _: None = Depends(require_auth)):
-    sess = _ssh_or_404(session_id)
+def sftp_list(session_id: int, path: str = "/", expected_revision: str = "", _: None = Depends(require_auth)):
+    sess = _ssh_or_404(session_id, expected_revision)
     return {"data": _wrap(sshpool.sftp_list, sess, path or "/")}
 
 
 @api.get("/ssh/sftp/read")
-def sftp_read(session_id: int, path: str, _: None = Depends(require_auth)):
-    sess = _ssh_or_404(session_id)
+def sftp_read(session_id: int, path: str, expected_revision: str = "", _: None = Depends(require_auth)):
+    sess = _ssh_or_404(session_id, expected_revision)
     data = _wrap(sshpool.sftp_read, sess, path)
     try:
         text = data.decode("utf-8")
@@ -873,10 +886,10 @@ def sftp_read(session_id: int, path: str, _: None = Depends(require_auth)):
 
 
 @api.get("/ssh/sftp/download")
-def sftp_download(session_id: int, path: str, _: None = Depends(require_auth)):
+def sftp_download(session_id: int, path: str, expected_revision: str = "", _: None = Depends(require_auth)):
     from fastapi.responses import Response
     from urllib.parse import quote
-    data = _wrap(sshpool.sftp_read, _ssh_or_404(session_id), path, 64_000_000)
+    data = _wrap(sshpool.sftp_read, _ssh_or_404(session_id, expected_revision), path, 64_000_000)
     filename = quote(path.rsplit("/", 1)[-1], safe="")
     return Response(data, media_type="application/octet-stream",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"})
@@ -890,16 +903,37 @@ def ssh_forget_host_key(session_id: int, _: None = Depends(require_auth)):
     return {"ok": True}
 
 
+class SftpBatchBody(BaseModel):
+    session_id: int
+    path: str
+    names: list[str]
+    expected_revision: str = ""
+
+
+@api.post("/ssh/sftp/download-batch")
+def sftp_download_batch(body: SftpBatchBody, _: None = Depends(require_auth)):
+    from fastapi.responses import Response
+    if not body.path.startswith("/") or "\x00" in body.path or not 1 <= len(body.names) <= 100:
+        raise HTTPException(400, "请选择 1–100 个文件")
+    if len(set(body.names)) != len(body.names) or any(not name or name in (".", "..") or
+            any(char in name for char in ("/", "\\", "\x00")) for name in body.names):
+        raise HTTPException(400, "无效或重复的文件名称")
+    sess = _ssh_or_404(body.session_id, body.expected_revision)
+    data = _wrap(sshpool.sftp_download_batch, sess, body.path, body.names)
+    return Response(data, media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="sftp-files.zip"'})
+
+
 class SftpWriteBody(BaseModel):
     session_id: int
     path: str
     content: str = ""
     content_base64: str = ""
+    expected_revision: str = ""
 
 
 @api.post("/ssh/sftp/write")
 def sftp_write(body: SftpWriteBody, _: None = Depends(require_auth)):
-    sess = _ssh_or_404(body.session_id)
+    sess = _ssh_or_404(body.session_id, body.expected_revision)
     data = (base64.b64decode(body.content_base64) if body.content_base64
             else body.content.encode("utf-8"))
     return _wrap(sshpool.sftp_write, sess, body.path, data)
@@ -907,6 +941,7 @@ def sftp_write(body: SftpWriteBody, _: None = Depends(require_auth)):
 
 @api.post("/ssh/sftp/upload")
 async def sftp_upload(request: Request, session_id: int, path: str,
+                      expected_revision: str = "",
                       _: None = Depends(require_auth)):
     """Upload a new binary file; an existing remote file is never overwritten."""
     if not path.startswith("/") or path.endswith("/") or "\\" in path or "\x00" in path \
@@ -915,7 +950,7 @@ async def sftp_upload(request: Request, session_id: int, path: str,
     if request.headers.get("content-length", "").isdigit() \
             and int(request.headers["content-length"]) > 100_000_000:
         raise HTTPException(413, "文件超过 100 MB 上传限制")
-    sess = _ssh_or_404(session_id)
+    sess = _ssh_or_404(session_id, expected_revision)
     try:
         return await sshpool.sftp_upload(sess, path, request.stream())
     except sshpool.SftpUploadTooLarge as e:
@@ -931,23 +966,24 @@ class SftpPathBody(BaseModel):
     path: str
     new_path: str = ""
     is_dir: bool = False
+    expected_revision: str = ""
 
 
 @api.post("/ssh/sftp/mkdir")
 def sftp_mkdir(body: SftpPathBody, _: None = Depends(require_auth)):
-    sess = _ssh_or_404(body.session_id)
+    sess = _ssh_or_404(body.session_id, body.expected_revision)
     return _wrap(sshpool.sftp_mkdir, sess, body.path)
 
 
 @api.post("/ssh/sftp/delete")
 def sftp_delete(body: SftpPathBody, _: None = Depends(require_auth)):
-    sess = _ssh_or_404(body.session_id)
+    sess = _ssh_or_404(body.session_id, body.expected_revision)
     return _wrap(sshpool.sftp_delete, sess, body.path, body.is_dir)
 
 
 @api.post("/ssh/sftp/rename")
 def sftp_rename(body: SftpPathBody, _: None = Depends(require_auth)):
-    sess = _ssh_or_404(body.session_id)
+    sess = _ssh_or_404(body.session_id, body.expected_revision)
     return _wrap(sshpool.sftp_rename, sess, body.path, body.new_path)
 
 
@@ -962,11 +998,12 @@ class ForwardBody(BaseModel):
     local_port: int
     remote_host: str
     remote_port: int
+    expected_revision: str = ""
 
 
 @api.post("/ssh/forwards")
 def forward_start(body: ForwardBody, _: None = Depends(require_auth)):
-    sess = _ssh_or_404(body.session_id)
+    sess = _ssh_or_404(body.session_id, body.expected_revision)
     if body.type not in ("local", "remote"):
         raise HTTPException(400, "类型必须是 local 或 remote")
     return _wrap(sshpool.start_forward, sess, body.type, body.local_port,

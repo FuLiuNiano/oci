@@ -494,14 +494,78 @@ def test_ssh_socks_auth_rejection_never_starts_target_connection(database, monke
         sshpool._run(close())
 
 
-def test_changing_saved_proxy_disconnects_existing_terminal(client, ssh_server):
+@pytest.mark.parametrize("change", [{"proxy_command":"socks5h://127.0.0.1:1"},
+                                    {"username":"other-account"}, {"secret":"new-secret"},
+                                    {"host":"other.example.invalid"}])
+def test_changing_saved_proxy_disconnects_existing_terminal(client, ssh_server, change):
     body = {"name":"proxy-change", "host":ssh_server["host"], "port":ssh_server["port"],
             "username":ssh_server["username"], "secret":ssh_server["secret"]}
     sid = client.post("/api/ssh/sessions", json=body).json()["id"]
     with client.websocket_connect(f"/ws/ssh?sid={sid}") as ws:
         ws.send_text("hello\n")
         assert "hello" in ws.receive_text()
-        body["proxy_command"] = "socks5h://127.0.0.1:1"
+        body.update(change)
         assert client.put(f"/api/ssh/sessions/{sid}", json=body).status_code == 200
         with pytest.raises(WebSocketDisconnect):
             ws.receive_text()
+
+
+def test_two_vps_credentials_files_and_proxy_failure_are_isolated(database, socks_proxy, second_socks_proxy):
+    seen = []
+    roots = [database / "vps-a", database / "vps-b"]
+    for index, root in enumerate(roots):
+        root.mkdir()
+        (root / "identity.txt").write_text(str(index))
+    def server_type(index):
+        class IsolatedServer(asyncssh.SSHServer):
+            def begin_auth(self, username): return True
+            def password_auth_supported(self): return True
+            def validate_password(self, username, password):
+                seen.append((index, username, password))
+                return username == f"user-{index}" and password == f"secret-{index}"
+        return IsolatedServer
+    async def check():
+        servers, connections = [], []
+        try:
+            for index in range(2):
+                servers.append(await asyncssh.create_server(server_type(index), "127.0.0.1", 0,
+                    server_host_keys=[asyncssh.generate_private_key("ssh-rsa")],
+                    sftp_factory=lambda channel, root=roots[index]: asyncssh.SFTPServer(channel, chroot=str(root))))
+            sessions = [dict(host=f"vps-{i}.example.invalid", port=servers[i].get_port(),
+                             username=f"user-{i}", secret=f"secret-{i}", auth_type="password",
+                             proxy_command=proxy[0]) for i, proxy in enumerate((socks_proxy, second_socks_proxy))]
+            connections.extend(await asyncio.gather(*(sshpool._connect(s) for s in sessions)))
+            for i, conn in enumerate(connections):
+                async with conn.start_sftp_client() as sftp:
+                    async with sftp.open("/identity.txt", "r") as remote:
+                        assert await remote.read() == str(i)
+                    async with sftp.open("/write.txt", "w") as remote:
+                        await remote.write(f"session-{i}")
+            assert sorted(seen) == [(i, f"user-{i}", f"secret-{i}") for i in range(2)]
+            with pytest.raises(sshpool.SshError, match="认证失败"):
+                await sshpool._connect({**sessions[1], "secret":"secret-0"})
+            for writer in list(socks_proxy[2]): writer.close()
+            await asyncio.wait_for(connections[0].wait_closed(), 3)
+            assert not connections[1].is_closed()
+            async with connections[1].start_sftp_client() as sftp:
+                async with sftp.open("/identity.txt", "r") as remote:
+                    assert await remote.read() == "1"
+            for i, proxy in enumerate((socks_proxy, second_socks_proxy)):
+                assert proxy[1] and all(target == (sessions[i]["host"], sessions[i]["port"]) for target in proxy[1])
+            for i, root in enumerate(roots): assert (root / "write.txt").read_text() == f"session-{i}"
+        finally:
+            for conn in connections: conn.close()
+            await asyncio.gather(*(conn.wait_closed() for conn in connections))
+            for server in servers: server.close()
+            await asyncio.gather(*(server.wait_closed() for server in servers))
+    sshpool._run(check())
+
+
+def test_ssh_authentication_does_not_use_default_keys_or_agent(ssh_server, monkeypatch):
+    import os
+    monkeypatch.setenv("SSH_AUTH_SOCK", os.path.join(os.getcwd(), "unexpected-agent"))
+    args = sshpool._connect_args(ssh_server)
+    assert args["agent_path"] is None and args["client_keys"] == []
+    assert sshpool.test_session(ssh_server) == "ok"
+    with pytest.raises(sshpool.SshError, match="认证失败"):
+        sshpool.test_session({**ssh_server, "secret":"incorrect"})

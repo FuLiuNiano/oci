@@ -126,6 +126,11 @@ async def ws_ssh(websocket: fastapi.WebSocket):
         return
     sess = rows[0]
     await websocket.accept()
+    revision = websocket.query_params.get("expected_revision", "")
+    if revision and not hmac.compare_digest(revision, webapi._ssh_revision(sess)):
+        await websocket.send_text("\r\n[连接配置已变更或服务已重启，请刷新页面重新选择目标]\r\n")
+        await websocket.close(code=4409)
+        return
 
     import asyncssh
 

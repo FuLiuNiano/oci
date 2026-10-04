@@ -6,6 +6,88 @@
   let sftpPath = "/";
   let editingSessionId = null;
   const connectionStates = new Map();
+  let splitMode = false;
+  const histories = new Map();
+  function workspaceKey(sid) {
+    const s = state.sessions.find(x => x.id === sid);
+    return 'ssh-work:' + JSON.stringify([PANEL_PREFIX, sid, s?.host, s?.port, s?.username]);
+  }
+  function remembered(sid) {
+    try { return JSON.parse(localStorage.getItem(workspaceKey(sid)) || '{}'); } catch { return {}; }
+  }
+  function remember(sid, value) {
+    try { localStorage.setItem(workspaceKey(sid), JSON.stringify({...remembered(sid), ...value})); } catch {}
+  }
+  function restoreHeight() {
+    const height = remembered(activeSid)[$('#term-area').classList.contains('terminal-fullscreen') ? 'fullHeight' : 'height'];
+    $('#term-stack').style.removeProperty('--terminal-height');
+    if (Number.isFinite(height)) resizeTerminal(height);
+  }
+  $('#btn-term-retry').addEventListener('click', () => { if (activeSid != null) openTerminal(activeSid); });
+  $('#btn-term-split').addEventListener('click', () => {
+    splitMode = !splitMode;
+    $('#term-stack').classList.toggle('split', splitMode);
+    $('#btn-term-split').setAttribute('aria-pressed', String(splitMode));
+    $('#btn-term-split').textContent = splitMode ? '取消分屏' : '分屏';
+    if (activeSid != null) activateTab(activeSid);
+  });
+  function recordMetrics(sid, data) {
+    const key = workspaceKey(sid), now = performance.now();
+    const history = histories.get(key) || [], previous = history.at(-1);
+    let rx = null, tx = null;
+    if (previous && now - previous.time < 20000 && now > previous.time) {
+      const dt = (now - previous.time) / 1000;
+      if (Number(data.net_rx_mb) >= previous.rx && Number(data.net_tx_mb) >= previous.tx) {
+        rx = (Number(data.net_rx_mb) - previous.rx) / dt;
+        tx = (Number(data.net_tx_mb) - previous.tx) / dt;
+      }
+    }
+    history.push({time:now, rx:Number(data.net_rx_mb), tx:Number(data.net_tx_mb), cpu:data.cpu, mem:data.mem});
+    const recent = history.filter(x => now - x.time <= 300000).slice(-61);
+    histories.set(key, recent);
+    const line = (field, color) => {
+      const points = recent.filter(x => x[field] != null && Number.isFinite(Number(x[field])))
+        .map(x => `${Math.max(0, 300 - (now-x.time)/1000)},${50-Math.max(0,Math.min(100,Number(x[field])))/2}`).join(' ');
+      return `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+    };
+    $('#term-history').innerHTML = `<span>最近 5 分钟 · CPU（绿）/ 内存（蓝）</span><svg viewBox="0 0 300 50" role="img" aria-label="当前会话 CPU 与内存百分比曲线">${line('cpu','#19754e')}${line('mem','#2863c7')}</svg>`;
+    return `<div class="mon">实时网速 ↓${rx == null ? '—' : rx.toFixed(2)+' MB/s'} ↑${tx == null ? '—' : tx.toFixed(2)+' MB/s'}</div>`;
+  }
+  function routeLabel(sess) {
+    return (sess?.proxy_command || "").trim() ? "代理连接 · 失败禁止直连" : "直连";
+  }
+  function sessionLabel(sess) {
+    return `${sess?.name || "未知会话"} · ${sess?.host || ""} · ${routeLabel(sess)}`;
+  }
+  const splitter = $("#term-splitter");
+  function resizeTerminal(height) {
+    const area = $("#term-area"), stack = $("#term-stack");
+    const reserved = splitter.offsetHeight + $('.terminal-hint').offsetHeight +
+      ($('#sftp-panel').parentElement === area && !$('#sftp-panel').classList.contains('hide') ? 160 : 10);
+    const maximum = area.classList.contains("terminal-fullscreen")
+      ? Math.max(120, area.clientHeight - (stack.getBoundingClientRect().top - area.getBoundingClientRect().top) - reserved) : Math.max(200, innerHeight * 1.5);
+    const value = Math.round(Math.max(120, Math.min(maximum, height)));
+    stack.style.setProperty("--terminal-height", value + "px");
+    splitter.setAttribute("aria-valuemax", Math.round(maximum));
+    splitter.setAttribute("aria-valuenow", value);
+    if (activeSid != null) remember(activeSid, {[area.classList.contains('terminal-fullscreen') ? 'fullHeight' : 'height']:value});
+    terminals[activeSid]?.fit.fit();
+  }
+  let drag = null;
+  splitter.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    drag = {y: event.clientY, height: $("#term-stack").clientHeight};
+    splitter.setPointerCapture(event.pointerId);
+  });
+  splitter.addEventListener("pointermove", event => { if (drag) resizeTerminal(drag.height + event.clientY - drag.y); });
+  splitter.addEventListener("lostpointercapture", () => { drag = null; });
+  splitter.addEventListener("pointerup", event => { drag = null; splitter.releasePointerCapture(event.pointerId); });
+  splitter.addEventListener("keydown", event => {
+    if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    resizeTerminal($("#term-stack").clientHeight + (event.key === "ArrowUp" ? -30 : 30));
+  });
   const toolPanels = ["#ssh-form", "#ssh-batch", "#ssh-fwd-panel", "#ssh-monitor-panel"];
   function showTool(selector, toggle = true) {
     const panel = $(selector), opening = !toggle || panel.classList.contains("hide");
@@ -16,9 +98,11 @@
     return opening;
   }
   function setFullscreen(enabled) {
+    $("#term-stack").style.removeProperty("--terminal-height");
     $("#term-area").classList.toggle("terminal-fullscreen", enabled);
     document.documentElement.classList.toggle("terminal-scroll-lock", enabled);
     $("#btn-term-fullscreen").textContent = enabled ? "还原" : "全屏";
+    if (activeSid != null) restoreHeight();
   }
   function metricsHtml(r) {
     const bar = (label, value) => {
@@ -40,6 +124,7 @@
     stopLiveMetrics();
     const sid = activeSid, t = terminals[sid], generation = monitorGeneration;
     const box = $("#term-live-metrics");
+    $('#term-history').textContent = '';
     if (!t || t.ws.readyState !== WebSocket.OPEN) { box.textContent = "终端未连接，自动采集已停止"; return; }
     box.textContent = "正在采集当前终端的资源数据…";
     async function sample() {
@@ -51,12 +136,12 @@
       monitorRequest = controller;
       try {
         const response = await fetch(panelPath("/api/ssh/monitor"), {method: "POST",
-          headers: {"Content-Type": "application/json"}, body: JSON.stringify({session_id: sid}), signal: controller.signal});
-        const data = await response.json();
+          headers: {"Content-Type": "application/json"}, body: JSON.stringify({session_id: sid, expected_revision:t.session.connection_revision}), signal: controller.signal});
+        const data = await response.json().catch(() => ({}));
         if (generation !== monitorGeneration) return;
         if (response.status === 401) { showLogin(); stopLiveMetrics(); return; }
-        if (!response.ok) throw new Error(data.detail || "采集失败");
-        box.innerHTML = metricsHtml(data) + `<small>每 5 秒刷新 · ${new Date().toLocaleTimeString()}</small>`;
+        if (!response.ok) throw new Error(data.detail || `采集失败（HTTP ${response.status}）`);
+        box.innerHTML = metricsHtml(data) + recordMetrics(sid, data) + `<small>${esc(sessionLabel(t.session))} · 每 5 秒刷新 · ${new Date().toLocaleTimeString()}</small>`;
       } catch (error) {
         if (generation === monitorGeneration && error.name !== "AbortError") box.textContent = "采集失败：" + error.message + "（稍后重试）";
       } finally {
@@ -383,20 +468,21 @@
     fit.fit();
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}${panelPath(`/ws/ssh?sid=${sid}&cols=${term.cols}&rows=${term.rows}`)}`);
+    const ws = new WebSocket(`${proto}://${location.host}${panelPath(`/ws/ssh?sid=${sid}&cols=${term.cols}&rows=${term.rows}&expected_revision=${encodeURIComponent(sess.connection_revision || '')}`)}`);
     ws.onopen = () => {
       fit.fit(); term.focus();
       ws.send(JSON.stringify({resize: {cols: term.cols, rows: term.rows}}));
       connectionStates.set(sid, "已连接"); renderSessionCards();
       tabBtn.classList.add("connected");
-      if (activeSid === sid) { $("#term-connection-status").textContent = "已连接 · " + sess.name; startLiveMetrics(); }
+      if (activeSid === sid) { $("#term-connection-status").textContent = "已连接 · " + sessionLabel(sess); startLiveMetrics(); }
     };
     ws.onmessage = ev => term.write(ev.data);
     ws.onclose = ev => {
+      if (activeSid === sid) $('#btn-term-retry').disabled = false;
       if (activeSid === sid) { stopLiveMetrics(); $("#term-live-metrics").textContent = "连接已断开，自动采集已停止"; }
       connectionStates.set(sid, "已断开"); renderSessionCards();
       tabBtn.classList.remove("connected");
-      if (activeSid === sid) $("#term-connection-status").textContent = "已断开 · " + sess.name;
+      if (activeSid === sid) $("#term-connection-status").textContent = "已断开 · " + sessionLabel(sess);
       if (!terminals[sid] || terminals[sid].ws !== ws) return;
       term.write(ev.code === 4401 ? "\r\n\r\n[未登录]" : "\r\n\r\n[连接已断开，点击 × 关闭，或点击终端重新连接]");
     };
@@ -419,12 +505,15 @@
         term.write(`\r\n[贴图已上传] ${name}\r\n`);
       } catch (e) { term.write(`\r\n[贴图上传失败] ${e.message}\r\n`); }
     });
-    const resize = () => { if (sid === activeSid) fit.fit(); };
+    holder.dataset.session = sessionLabel(sess);
+    holder.addEventListener('pointerdown', () => { if (activeSid !== sid) activateTab(sid); });
+    holder.addEventListener('focusin', () => { if (activeSid !== sid) activateTab(sid); });
+    const resize = () => { if (sid === activeSid || splitMode) fit.fit(); };
     window.addEventListener("resize", resize);
-    const sizeObserver = new ResizeObserver(() => { if (sid === activeSid && holder.clientWidth) fit.fit(); });
+    const sizeObserver = new ResizeObserver(() => { if ((sid === activeSid || splitMode) && holder.clientWidth) fit.fit(); });
     sizeObserver.observe(holder);
 
-    terminals[sid] = { term, ws, fit, tabBtn, holder, closeBtn, resize, sizeObserver };
+    terminals[sid] = { term, ws, fit, tabBtn, holder, closeBtn, resize, sizeObserver, session: {...sess} };
     activateTab(sid);
     $("#term-area").scrollIntoView({block: "start", behavior: "smooth"});
   }
@@ -433,13 +522,18 @@
     activeSid = sid;
     startLiveMetrics();
     for (const [k, t] of Object.entries(terminals)) {
-      t.holder.classList.toggle("hide", String(k) !== String(sid));
+      t.holder.classList.toggle("hide", !splitMode && String(k) !== String(sid));
+      t.holder.classList.toggle('selected-pane', String(k) === String(sid));
+      if (splitMode) t.fit.fit();
       t.tabBtn.classList.toggle("active", String(k) === String(sid));
       t.tabBtn.setAttribute("aria-selected", String(String(k) === String(sid)));
     }
     const t = terminals[sid];
+    restoreHeight();
+    $('#btn-term-retry').disabled = t?.ws.readyState <= 1;
     if (t) { t.fit.fit(); t.term.focus(); }
-    if (t) $("#term-connection-status").textContent = (t.ws.readyState === 1 ? "已连接" : t.ws.readyState === 0 ? "连接中…" : "已断开") + " · " + state.sessions.find(s => s.id === sid)?.name;
+    if (t) $("#term-connection-status").textContent = (t.ws.readyState === 1 ? "已连接" : t.ws.readyState === 0 ? "连接中…" : "已断开") + " · " + sessionLabel(t.session);
+    if (sftpSid !== null && sftpSid !== sid && !$("#sftp-panel").classList.contains("hide")) openSftp(sid);
   }
 
   function closeTerminal(sid) {
@@ -469,6 +563,22 @@
   }
 
   /* ---- SFTP ---- */
+  $('#sftp-breadcrumb').addEventListener('click', event => { const button = event.target.closest('[data-dir]'); if (button) sftpList(button.dataset.dir); });
+  $('#sftp-select-all').addEventListener('change', event => { $$('#sftp-table [data-file]').forEach(box => { box.checked = event.target.checked; }); });
+  $('#btn-sftp-download').addEventListener('click', async () => {
+    const sid = sftpSid, directory = sftpPath;
+    const names = $$('#sftp-table [data-file]:checked').map(box => box.dataset.file);
+    if (!names.length) { toast('先选择要下载的文件', false); return; }
+    const button = $('#btn-sftp-download'); button.disabled = true;
+    try {
+      const response = await fetch(panelPath('/api/ssh/sftp/download-batch'), {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({session_id:sid, path:directory, names, expected_revision:state.sessions.find(s => s.id === sid)?.connection_revision})});
+      if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || `下载失败（HTTP ${response.status}）`); }
+      const url = URL.createObjectURL(await response.blob()), link = document.createElement('a');
+      link.href = url; link.download = `sftp-${sid}.zip`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch(error) { toast(error.message, false); }
+    finally { button.disabled = false; }
+  });
   let sftpListRequest = 0;
   $("#btn-sftp-close").addEventListener("click", () => {
     ++sftpListRequest;
@@ -477,15 +587,18 @@
   $("#btn-sftp-up").addEventListener("click", () => sftpList(sftpPath.replace(/\/[^/]+\/?$/, "") || "/"));
   $("#btn-sftp-refresh").addEventListener("click", () => sftpList());
   function openSftp(sid) {
+    if (sftpSid !== sid) $("#sftp-upload-progress").classList.add("hide");
     sftpSid = sid;
+    renderUpload();
     const sess = state.sessions.find(x => x.id === sid);
     $("#sftp-sess").textContent = sess ? `${sess.name} (${sess.host})` : sid;
+    $("#sftp-route").textContent = routeLabel(sess);
     $("#sftp-panel").classList.remove("hide");
     if (terminals[sid]) $("#term-area").appendChild($("#sftp-panel"));
     else $("#ssh-tools-dock").appendChild($("#sftp-panel"));
     $("#sftp-panel").scrollIntoView({block: "nearest", behavior: "smooth"});
-    sftpPath = "/";
-    $("#sftp-path").textContent = "/";
+    sftpPath = remembered(sid).path || "/";
+    $("#sftp-path").textContent = sftpPath;
     $("#sftp-table tbody").innerHTML = "";
     $("#sftp-edit").classList.add("hide");
     $("#sftp-editbar").classList.add("hide");
@@ -501,10 +614,14 @@
       const r = await api(`/api/ssh/sftp/list?session_id=${sid}&path=${encodeURIComponent(path)}`);
       if (request !== sftpListRequest) return;
       sftpPath = path;
+      remember(sid, {path});
+      $('#sftp-select-all').checked = false;
+      const parts = path.split('/').filter(Boolean);
+      $('#sftp-breadcrumb').innerHTML = `<button data-dir="/">根目录</button>` + parts.map((part, index) => `<button data-dir="${esc('/'+parts.slice(0,index+1).join('/'))}">${esc(part)}</button>`).join(' / ');
       $("#sftp-path").textContent = sftpPath;
       $("#btn-sftp-up").disabled = path === "/";
       $("#sftp-table tbody").innerHTML = r.data.map(f => `<tr>
-        <td>${f.dir ? "📁" : "📄"} <a href="javascript:void(0)" data-fopen="${esc(f.name)}" data-fdir="${f.dir}">${esc(f.name)}</a></td>
+        <td>${f.dir ? "📁" : `<input type="checkbox" data-file="${esc(f.name)}" aria-label="选择 ${esc(f.name)}"> 📄`} <a href="javascript:void(0)" data-fopen="${esc(f.name)}" data-fdir="${f.dir}">${esc(f.name)}</a></td>
         <td>${f.dir ? "-" : (f.size / 1024).toFixed(1) + "KB"}</td>
         <td>${f.mtime ? new Date(f.mtime * 1000).toLocaleString() : "-"}</td>
         <td class="ops">${f.dir ? "" : `<button data-fedit="${esc(f.name)}">编辑</button>`}
@@ -533,12 +650,17 @@
           sftpList(sftpPath.replace(/\/$/, "") + "/" + link.dataset.fopen);
         } else downloadFile(link.dataset.fopen);
       } else if (edit) {
+        const editorSid = sftpSid, request = sftpListRequest;
+        const editorRevision = state.sessions.find(s => s.id === editorSid)?.connection_revision || '';
         const full = sftpPath.replace(/\/$/, "") + "/" + edit.dataset.fedit;
         const r = await api(`/api/ssh/sftp/read?session_id=${sftpSid}&path=${encodeURIComponent(full)}`);
+        if (editorSid !== sftpSid || request !== sftpListRequest) return;
         $("#sftp-edit").textContent = r.content;
         $("#sftp-edit").classList.remove("hide");
         $("#sftp-editbar").classList.remove("hide");
         $("#sftp-edit").dataset.path = full;
+        $("#sftp-edit").dataset.sid = editorSid;
+        $("#sftp-edit").dataset.revision = editorRevision;
       } else if (rename) {
         const nn = prompt("新名称：", rename.dataset.frename);
         if (!nn) return;
@@ -559,7 +681,8 @@
   async function downloadFile(name) {
     try {
       const full = sftpPath.replace(/\/$/, "") + "/" + name;
-      const r = await fetch(panelPath(`/api/ssh/sftp/download?session_id=${sftpSid}&path=${encodeURIComponent(full)}`));
+      const revision = state.sessions.find(s => s.id === sftpSid)?.connection_revision || '';
+      const r = await fetch(panelPath(`/api/ssh/sftp/download?session_id=${sftpSid}&path=${encodeURIComponent(full)}&expected_revision=${encodeURIComponent(revision)}`));
       if (!r.ok) { const data = await r.json(); throw new Error(data.detail || "下载失败"); }
       const blob = await r.blob();
       const a = document.createElement("a");
@@ -580,60 +703,85 @@
     } catch (e) { toast(e.message, false); }
   });
   $("#btn-sftp-upload").addEventListener("click", () => $("#sftp-upload-input").click());
-  $("#sftp-upload-input").addEventListener("change", async (event) => {
-    const files = Array.from(event.target.files || []);
-    const button = $("#btn-sftp-upload");
-    const sid = sftpSid;
-    const directory = sftpPath;
-    if (!files.length) return;
-    $("#sftp-upload-progress").classList.remove("hide", "upload-error");
-    $("#sftp-upload-meter").value = 0;
-    button.disabled = true;
+  const uploadTasks = new Map();
+  function renderUpload() {
+    const task = uploadTasks.get(sftpSid);
+    $('#btn-sftp-upload').disabled = !!task?.running;
+    $('#btn-sftp-upload').textContent = task?.running ? '上传中…' : '上传文件';
+    $('#btn-sftp-cancel').disabled = !task?.running;
+    $('#sftp-upload-progress').classList.toggle('hide', !task);
+    $('#sftp-upload-progress').classList.toggle('upload-error', !!task?.error);
+    if (task) {
+      $('#sftp-upload-label').textContent = task.label;
+      $('#sftp-upload-meter').value = task.percent;
+    }
+  }
+  $('#btn-sftp-cancel').addEventListener('click', () => {
+    const task = uploadTasks.get(sftpSid);
+    if (!task?.running) return;
+    task.cancelled = true;
+    task.xhr?.abort();
+  });
+  async function uploadFiles(files) {
+    const sid = sftpSid, directory = sftpPath;
+    const sess = state.sessions.find(s => s.id === sid);
+    if (!files.length || uploadTasks.get(sid)?.running) return;
+    const task = {running:true, cancelled:false, percent:0, label:'准备上传…', error:false};
+    uploadTasks.set(sid, task);
+    const update = () => { if (sftpSid === sid) renderUpload(); };
+    update();
     try {
       for (const file of files) {
+        if (task.cancelled) throw new Error('上传已取消；已完成的文件保留，请刷新确认远程状态');
         if (file.size > 100_000_000) throw new Error(`${file.name} 超过 100 MB 上传限制`);
-        const path = directory.replace(/\/$/, "") + "/" + file.name;
-        button.textContent = `上传中：${file.name}`;
-        $("#sftp-upload-progress").classList.remove("hide");
-        $("#sftp-upload-meter").value = 0;
-        $("#sftp-upload-label").textContent = `${file.name} · 0%`;
+        const path = directory.replace(/\/$/, '') + '/' + file.name;
+        task.label = `${file.name} · 0%`; task.percent = 0; update();
         await new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open("POST", panelPath(`/api/ssh/sftp/upload?session_id=${sid}&path=${encodeURIComponent(path)}`));
-          xhr.setRequestHeader("Content-Type", "application/octet-stream");
+          const xhr = new XMLHttpRequest(); task.xhr = xhr;
+          xhr.open('POST', panelPath(`/api/ssh/sftp/upload?session_id=${sid}&path=${encodeURIComponent(path)}&expected_revision=${encodeURIComponent(sess?.connection_revision || '')}`));
+          xhr.setRequestHeader('Content-Type','application/octet-stream');
           xhr.upload.onprogress = e => {
             if (!e.lengthComputable) return;
-            const percent = Math.floor(e.loaded / Math.max(e.total, 1) * 100);
-            $("#sftp-upload-meter").value = percent;
-            $("#sftp-upload-label").textContent = `${file.name} · ${percent}% · ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB` + (percent === 100 ? " · 等待远程写入确认…" : "");
+            task.percent = Math.floor(e.loaded / Math.max(e.total, 1) * 100);
+            task.label = `${file.name} · ${task.percent}% · ${(e.loaded/1e6).toFixed(1)} / ${(e.total/1e6).toFixed(1)} MB` + (task.percent === 100 ? ' · 等待远程写入确认…' : ''); update();
           };
           xhr.onload = () => {
-            let result = {};
-            try { result = JSON.parse(xhr.responseText); } catch {}
+            let result = {}; try { result = JSON.parse(xhr.responseText); } catch {}
             if (xhr.status === 401) showLogin();
-            if (xhr.status < 200 || xhr.status >= 300) { reject(new Error(result.detail || `${file.name} 上传失败`)); return; }
-            $("#sftp-upload-meter").value = 100;
-            $("#sftp-upload-label").textContent = `${file.name} · 上传完成（远程已确认）`;
-            resolve();
+            if (xhr.status < 200 || xhr.status >= 300) { reject(new Error(result.detail || `上传失败（HTTP ${xhr.status}）`)); return; }
+            task.percent = 100; task.label = `${file.name} · 上传完成（远程已确认）`; update(); resolve();
           };
-          xhr.onerror = () => reject(new Error("上传连接失败，请检查远程文件状态"));
-          xhr.onabort = () => reject(new Error("上传已中断"));
+          xhr.onerror = () => reject(new Error('上传连接失败，请检查远程文件状态'));
+          xhr.onabort = () => reject(new Error('上传已取消；已完成的文件保留，请刷新确认远程状态'));
           xhr.send(file);
         });
-        toast(`${file.name} 上传成功`);
       }
+      if (task.cancelled) throw new Error('上传已取消，请刷新确认远程状态');
+      toast(`${sess?.name || sid}：上传完成`);
       if (sid === sftpSid && directory === sftpPath) await sftpList();
-    } catch (error) { $("#sftp-upload-progress").classList.add("upload-error"); $("#sftp-upload-label").textContent = "上传失败：" + error.message; toast(error.message, false); }
-    finally {
-      button.disabled = false;
-      button.textContent = "上传文件";
-      event.target.value = "";
+    } catch(error) {
+      task.error = true; task.label = '上传失败或取消：' + error.message;
+      toast(`${sess?.name || sid}：${error.message}`, false);
+    } finally { task.running = false; task.xhr = null; update(); }
+  }
+  $('#sftp-upload-input').addEventListener('change', event => {
+    const files = Array.from(event.target.files || []); event.target.value = ''; uploadFiles(files);
+  });
+  const drop = $('#sftp-drop');
+  drop.addEventListener('dragover', event => { event.preventDefault(); drop.classList.add('dragging'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('dragging'));
+  drop.addEventListener('drop', event => {
+    event.preventDefault(); drop.classList.remove('dragging');
+    if ([...(event.dataTransfer.items || [])].some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
+      toast('目录请先打包，再拖拽上传', false); return;
     }
+    uploadFiles(Array.from(event.dataTransfer.files || []));
   });
   $("#btn-sftp-save").addEventListener("click", async () => {
+    if (String(sftpSid) !== $("#sftp-edit").dataset.sid) { toast("会话已切换，请重新打开文件", false); return; }
     try {
       await api("/api/ssh/sftp/write", { method: "POST", body: {
-        session_id: sftpSid, path: $("#sftp-edit").dataset.path, content: $("#sftp-edit").textContent }});
+        session_id: Number($("#sftp-edit").dataset.sid), expected_revision: $("#sftp-edit").dataset.revision, path: $("#sftp-edit").dataset.path, content: $("#sftp-edit").textContent }});
       toast("已保存到远程");
     } catch (e) { toast(e.message, false); }
   });
@@ -703,7 +851,8 @@
     $("#mon-bars").innerHTML = `<span class="muted">采集中…</span>`;
     try {
       const r = await api("/api/ssh/monitor", { method: "POST", body: { session_id: sid } });
-      $("#mon-bars").innerHTML = metricsHtml(r);
-    } catch (e) { $("#mon-bars").innerHTML = `<span class="err-cell">${esc(e.message)}</span>`; }
+      if (Number($("#mon-session").value) !== sid) return;
+      $("#mon-bars").innerHTML = metricsHtml(r) + `<small>${esc(sessionLabel(state.sessions.find(s => s.id === sid)))}</small>`;
+    } catch (e) { if (Number($("#mon-session").value) === sid) $("#mon-bars").innerHTML = `<span class="err-cell">${esc(e.message)}</span>`; }
   });
 })();

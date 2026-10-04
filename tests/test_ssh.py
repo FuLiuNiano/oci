@@ -102,6 +102,50 @@ def test_sftp_upload_limit_removes_partial_file(client, ssh_server, database, mo
     assert not (database / "too-big.bin").exists()
 
 
+def test_batch_download_and_changed_target_guard(client, ssh_server, database):
+    import io
+    import zipfile
+    body = {**ssh_server, "name":"batch", "secret":"test-password"}
+    sid = client.post('/api/ssh/sessions', json=body).json()['id']
+    row = next(s for s in client.get('/api/ssh/sessions').json()['data'] if s['id'] == sid)
+    (database / '中文.txt').write_bytes(b'isolated-file')
+    request = dict(session_id=sid, path='/', names=['binary.dat', '中文.txt'], expected_revision=row['connection_revision'])
+    response = client.post('/api/ssh/sftp/download-batch', json=request)
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.read('binary.dat') == bytes(range(256))
+        assert archive.read('中文.txt') == b'isolated-file'
+    assert client.post('/api/ssh/sftp/download-batch', json={**request, 'names':['../secret']}).status_code == 400
+    body['host'] = 'other-vps.invalid'
+    assert client.put(f'/api/ssh/sessions/{sid}', json=body).status_code == 200
+    assert client.post('/api/ssh/sftp/download-batch', json=request).status_code == 409
+    assert client.post(f'/api/ssh/sftp/upload?session_id={sid}&path=/blocked&expected_revision={row["connection_revision"]}', content=b'wrong').status_code == 409
+    assert client.post('/api/ssh/sftp/write', json=dict(session_id=sid, path='/blocked', content='wrong', expected_revision=row['connection_revision'])).status_code == 409
+    assert not (database / 'blocked').exists()
+    revision = row['connection_revision']
+    for route in ('list', 'read', 'download'):
+        assert client.get(f'/api/ssh/sftp/{route}?session_id={sid}&path=/&expected_revision={revision}').status_code == 409
+    assert client.post('/api/ssh/monitor', json=dict(session_id=sid, expected_revision=revision)).status_code == 409
+    with client.websocket_connect(f'/ws/ssh?sid={sid}&expected_revision={revision}') as ws:
+        assert '连接配置已变更' in ws.receive_text()
+
+
+def test_upload_cancel_removes_partial_remote_file(ssh_server, database):
+    async def chunks():
+        yield b'partial'
+        raise asyncio.CancelledError()
+    async def cancel():
+        with pytest.raises(asyncio.CancelledError):
+            await sshpool.sftp_upload(ssh_server, '/cancelled.bin', chunks())
+    sshpool._run(cancel())
+    assert not (database / 'cancelled.bin').exists()
+
+
+def test_batch_size_limit(ssh_server):
+    with pytest.raises(sshpool.SshError, match='64 MB'):
+        sshpool.sftp_download_batch(ssh_server, '/', ['binary.dat'], max_bytes=10)
+
+
 def test_real_forward_stays_alive_after_create(ssh_server):
     async def echo(reader,writer):
         writer.write(await reader.read(20))

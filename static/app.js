@@ -36,6 +36,13 @@ function uiIcon(name) {
 }
 
 async function api(path, opts = {}) {
+  if (path.startsWith('/api/ssh/sftp/') || path === '/api/ssh/monitor' || path === '/api/ssh/forwards') {
+    const url = new URL(path, location.origin);
+    const sid = opts.body?.session_id ?? Number(url.searchParams.get('session_id'));
+    const revision = state.sessions.find(s => s.id === sid)?.connection_revision;
+    if (revision && opts.body && opts.body.expected_revision === undefined) opts = {...opts, body:{...opts.body, expected_revision:revision}};
+    if (revision && !opts.body) { url.searchParams.set('expected_revision', revision); path = url.pathname + url.search; }
+  }
   const init = { method: opts.method || "GET", headers: {} };
   if (opts.body !== undefined) {
     init.headers["Content-Type"] = "application/json";

@@ -107,10 +107,18 @@ async def _proxy_socket(sess, proxy):
                 proxy_rdns=True, proxy_username=proxy["username"], proxy_password=proxy["password"])
             sock.setblocking(False)
             return sock
-        except Exception:
+        except Exception as error:
             if sock:
                 sock.close()
-            raise SshError("SOCKS5 代理连接失败，已阻止连接，不会改为直连") from None
+            if isinstance(error, socks.SOCKS5AuthError):
+                reason = "代理认证失败，请检查代理用户名和密码"
+            elif isinstance(error, socks.ProxyConnectionError):
+                reason = "代理不可达，请检查代理地址、端口和服务"
+            elif isinstance(error, (TimeoutError, socks.SOCKS5Error)):
+                reason = "代理连接超时或代理无法连接目标 VPS"
+            else:
+                reason = "代理连接失败，请检查代理配置"
+            raise SshError(f"SOCKS5 {reason}；已阻止连接，不会改为直连") from None
     return await asyncio.to_thread(connect)
 
 
@@ -119,6 +127,8 @@ def _connect_args(sess):
         host=sess["host"], port=int(sess.get("port") or 22),
         username=sess.get("username") or "root",
         config=None,
+        agent_path=None, agent_forwarding=False, client_keys=[],
+        preferred_auth="publickey" if sess.get("auth_type") == "key" else "password,keyboard-interactive",
         connect_timeout=15,
         keepalive_interval=15, keepalive_count_max=3,
     )
@@ -165,12 +175,21 @@ async def _connect(sess):
             store.set_setting(key_id, key.export_public_key().decode())
         if sess.get("id") is not None:
             with _active_lock:
-                current = store.query("SELECT proxy_command FROM ssh_sessions WHERE id=?", (sess["id"],))
-                if not current or (current[0]["proxy_command"] or "").strip() != (sess.get("proxy_command") or "").strip():
+                current = store.query("SELECT * FROM ssh_sessions WHERE id=?", (sess["id"],))
+                fields = ("host", "port", "username", "auth_type", "secret", "proxy_command")
+                if not current or any((current[0].get(field) or "") != (sess.get(field) or "") for field in fields):
                     conn.close()
-                    raise SshError("SSH 代理配置已变更，已断开旧连接，请重新打开终端")
+                    raise SshError("SSH 连接配置已变更，已断开旧连接，请重新打开终端")
                 _active_connections[conn] = (int(sess["id"]), asyncio.get_running_loop())
         return conn
+    except asyncssh.PermissionDenied:
+        raise SshError("SSH 认证失败，请检查此会话的用户名和密码/私钥") from None
+    except asyncssh.HostKeyNotVerifiable:
+        raise SshError("SSH 主机公钥与已保存记录不符，请核实目标主机后再重置信任") from None
+    except (TimeoutError, asyncio.TimeoutError):
+        raise SshError("SSH 连接超时，请检查此会话的地址、端口和代理；不会切换连接线路") from None
+    except ConnectionRefusedError:
+        raise SshError("目标拒绝 SSH 连接，请检查地址、端口及 SSH 服务") from None
     except asyncssh.Error as e:
         raise SshError(f"SSH 连接失败: {e}")
     except OSError as e:
@@ -217,6 +236,10 @@ def _sftp_call(sess, fn):
         try:
             async with conn.start_sftp_client() as sftp:
                 return await fn(sftp)
+        except asyncssh.SFTPPermissionDenied:
+            raise SshError("SFTP 无权限访问此路径，请检查远程目录权限") from None
+        except asyncssh.SFTPNoSuchFile:
+            raise SshError("SFTP 文件或目录不存在，请刷新目录后重试") from None
         finally:
             conn.close()
     return _run(_inner())
@@ -301,6 +324,29 @@ def sftp_mkdir(sess, path):
     async def op(sftp):
         await sftp.mkdir(path)
         return {"ok": True}
+    return _sftp_call(sess, op)
+
+
+def sftp_download_batch(sess, path, names, max_bytes=64_000_000):
+    """One captured session and one connection for the entire bounded archive."""
+    import io
+    import zipfile
+    async def op(sftp):
+        archive = io.BytesIO()
+        total = 0
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as output:
+            for name in names:
+                async with sftp.open(path.rstrip("/") + "/" + name, "rb") as remote:
+                    with output.open(name, "w") as target:
+                        while True:
+                            chunk = await remote.read(65536)
+                            if not chunk:
+                                break
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise SshError("所选文件总大小超过 64 MB，请分批下载")
+                            target.write(chunk)
+        return archive.getvalue()
     return _sftp_call(sess, op)
 
 

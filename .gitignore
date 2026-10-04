@@ -11,3 +11,6 @@ panel.pid
 .env
 *.zip
 *.tar.gz
+.panel-backups/
+.panel-update.lock
+*.before-rollback-*/

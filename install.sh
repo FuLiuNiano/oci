@@ -37,6 +37,9 @@ EOF
 }
 
 case "${1:-start}" in
+  update|rollback)
+    exec python3 "$APP_DIR/update_panel.py" "$@"
+    ;;
   install|start)
     if [ -f "$APP_DIR/panel.pid" ] && kill -0 "$(cat "$APP_DIR/panel.pid")" 2>/dev/null; then
       echo "面板已经运行，请使用 restart 重启"; exit 0
@@ -79,6 +82,6 @@ case "${1:-start}" in
     echo "服务已停止并卸载。数据目录 $APP_DIR/data 已保留，彻底删除请手动清理。"
     ;;
   *)
-    echo "用法: bash install.sh [start|stop|restart|status|log|uninstall]"
+    echo "用法: bash install.sh [start|stop|restart|status|log|update|rollback 备份目录|uninstall]"
     ;;
 esac

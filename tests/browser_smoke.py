@@ -45,12 +45,18 @@ def main():
                     browser = p.chromium.launch(channel="chrome", headless=True)
                     page = browser.new_page(viewport={"width":1440, "height":1000})
                     terminal_input = []
+                    terminal_routes = {}
+                    inputs_by_session = {}
+                    batch_downloads = []
                     def ssh_transport(ws):
+                        route_sid = parse_qs(urlparse(ws.url).query)['sid'][0]
+                        terminal_routes[route_sid] = ws
                         def response(message):
                             if str(message).startswith('{"resize"'):
                                 ws.send("Demo terminal\r\n中文 https://example.com/test\r\n$ ")
                             else:
                                 terminal_input.append(message)
+                                inputs_by_session.setdefault(route_sid, []).append(message)
                         ws.on_message(response)
                     page.route_web_socket(re.compile(r"/ws/ssh\?"), ssh_transport)
                     monitor_requests = []
@@ -62,7 +68,11 @@ def main():
                             path = "/" + path[len(access_path):]
                         if path == "/api/ssh/monitor":
                             monitor_requests.append(route.request.post_data_json["session_id"])
-                            data = {"cpu":12.5,"mem":33,"disk":42,"net_rx_mb":100,"net_tx_mb":200}
+                            data = {"cpu":12.5,"mem":33,"disk":42,"net_rx_mb":100 + len(monitor_requests)*2,"net_tx_mb":200 + len(monitor_requests)}
+                        elif path == "/api/ssh/sftp/download-batch":
+                            batch_downloads.append(route.request.post_data_json)
+                            route.fulfill(content_type='application/zip', body=b'PK-test-browser-download')
+                            return
                         elif path == "/api/ssh/sftp/upload":
                             data = {"ok":True,"size":len(route.request.post_data_buffer or b"")}
                         elif path == "/api/ssh/sftp/list":
@@ -174,7 +184,8 @@ def main():
                     for index, name in enumerate(("Production", "Development", "Backup")):
                         response = page.request.post(base + access_path + "api/ssh/sessions", data={
                             "name":name,"host":f"203.0.113.{10+index}","username":"ubuntu",
-                            "auth_type":"password","secret":"synthetic-browser-only","tags":"Ubuntu,OCI"})
+                            "auth_type":"password","secret":"synthetic-browser-only","tags":"Ubuntu,OCI",
+                            "proxy_command":"socks5h://user:private-proxy-password@127.0.0.1:1080" if index == 1 else ""})
                         assert response.ok
                     page.click('nav button[data-view="ssh"]')
                     page.wait_for_function("document.querySelectorAll('.session-card').length === 3")
@@ -208,9 +219,21 @@ def main():
                     page.wait_for_function("window.__testTerminals[0].buffer.active.getLine(0).translateToString().includes('Demo')", timeout=5000)
                     assert page.evaluate("document.querySelector('#view-ssh').firstElementChild.id") == "term-area"
                     page.wait_for_function("document.querySelector('#term-live-metrics').textContent.includes('12.5%')")
+                    assert '直连' in page.locator('#term-connection-status').inner_text()
+                    height_before = page.locator('#term-stack').evaluate('el => el.clientHeight')
+                    handle = page.locator('#term-splitter')
+                    handle.scroll_into_view_if_needed()
+                    rect = handle.bounding_box()
+                    page.mouse.move(rect['x'] + rect['width']/2, rect['y'] + rect['height']/2)
+                    page.mouse.down()
+                    page.mouse.move(rect['x'] + rect['width']/2, rect['y'] + rect['height']/2 - 80, steps=8)
+                    page.mouse.up()
+                    assert page.locator('#term-stack').evaluate('el => el.clientHeight') < height_before - 50
                     initial_samples = len(monitor_requests)
                     page.wait_for_timeout(6000)
                     assert len(monitor_requests) > initial_samples
+                    assert page.locator('#term-history svg polyline').count() == 2
+                    assert 'MB/s' in page.locator('#term-live-metrics').inner_text()
                     page.locator('.term-holder:visible .xterm-screen').hover()
                     start_scroll = page.evaluate('scrollY')
                     page.mouse.wheel(0, 3000)
@@ -277,6 +300,19 @@ def main():
                     page.wait_for_function("document.querySelector('#sftp-path').textContent === '/子目录 space'")
                     page.click('#btn-sftp-up')
                     page.wait_for_function("document.querySelector('#sftp-path').textContent === '/'")
+                    page.locator('#sftp-table [data-fopen="子目录 space"]').click()
+                    page.wait_for_function("document.querySelector('#sftp-path').textContent === '/子目录 space'")
+                    page.click('#btn-sftp-close')
+                    page.click('#btn-term-sftp')
+                    page.wait_for_function("document.querySelector('#sftp-path').textContent === '/子目录 space'")
+                    page.locator('#sftp-breadcrumb [data-dir="/"]').click()
+                    page.wait_for_function("document.querySelector('#sftp-path').textContent === '/'")
+                    page.locator('#sftp-table [data-file="demo.txt"]').check()
+                    with page.expect_download() as download:
+                        page.click('#btn-sftp-download')
+                    assert download.value.suggested_filename.endswith('.zip')
+                    assert batch_downloads[-1]['names'] == ['demo.txt']
+                    assert batch_downloads[-1]['session_id'] == int(page.locator('#term-tabs [data-tsid].active').get_attribute('data-tsid'))
                     page.locator('#sftp-file-list').hover()
                     page.wait_for_timeout(500)
                     list_page_scroll = page.evaluate('scrollY')
@@ -304,6 +340,7 @@ def main():
                         constructor() { this.upload = {}; window.__uploadXHR = this; }
                         open() {} setRequestHeader() {}
                         send(file) { this.file = file; }
+                        abort() { this.onabort(); }
                       };
                     }""")
                     page.locator('#sftp-upload-input').set_input_files({"name":"progress.bin","mimeType":"application/octet-stream","buffer":b'x' * 100})
@@ -315,6 +352,17 @@ def main():
                     page.evaluate("Object.assign(window.__uploadXHR,{status:409,responseText:JSON.stringify({detail:'同名文件'})}).onload()")
                     page.wait_for_function("!document.querySelector('#btn-sftp-upload').disabled")
                     assert '上传失败' in page.locator('#sftp-upload-label').inner_text()
+                    page.evaluate("""() => {
+                        const transfer = new DataTransfer();
+                        transfer.items.add(new File(['abc'], 'drag-first.txt'));
+                        transfer.items.add(new File(['def'], 'drag-second.txt'));
+                        document.querySelector('#sftp-drop').dispatchEvent(new DragEvent('drop', {dataTransfer:transfer, bubbles:true}));
+                    }""")
+                    assert page.evaluate('window.__uploadXHR.file.name') == 'drag-first.txt'
+                    page.click('#btn-sftp-cancel')
+                    page.wait_for_function("!document.querySelector('#btn-sftp-upload').disabled")
+                    assert '已取消' in page.locator('#sftp-upload-label').inner_text()
+                    assert page.evaluate('window.__uploadXHR.file.name') == 'drag-first.txt'
                     page.evaluate('() => { window.XMLHttpRequest = window.__NativeXHR; }')
                     page.click('#btn-theme')
                     page.wait_for_function("window.__testTerminals[0].options.theme.background === '#202020'")
@@ -341,6 +389,13 @@ def main():
                     page.wait_for_timeout(300)
                     assert page.locator('#sftp-file-list').evaluate('el => el.scrollTop') > 0
                     assert page.evaluate('scrollY') == fullscreen_scroll
+                    split_height = page.locator('#term-stack').evaluate('el => el.clientHeight')
+                    page.locator('#term-splitter').focus()
+                    page.keyboard.press('ArrowUp')
+                    assert page.locator('#term-stack').evaluate('el => el.clientHeight') < split_height - 20
+                    for _ in range(30): page.keyboard.press('ArrowDown')
+                    assert page.locator('#sftp-panel').evaluate('el => el.getBoundingClientRect().bottom <= innerHeight + 2')
+                    for _ in range(8): page.keyboard.press('ArrowUp')
                     page.screenshot(path=str(preview / "sftp-fullscreen.png"))
                     page.click('#btn-sftp-close')
                     page.keyboard.press("Escape")
@@ -351,7 +406,65 @@ def main():
                     second_sid = page.locator('#term-tabs [data-tsid].active').get_attribute('data-tsid')
                     page.wait_for_function("document.querySelector('#term-live-metrics').textContent.includes('12.5%')")
                     assert monitor_requests[-1] == int(second_sid) and second_sid != first_sid
+                    page.click('#btn-term-split')
+                    assert page.locator('.term-holder:visible').count() == 2
+                    holders = page.locator('.term-holder:visible')
+                    holders.first.locator('.xterm-screen').click()
+                    page.keyboard.type('first-pane')
+                    assert 'first-pane' == ''.join(inputs_by_session[first_sid][-10:])
+                    holders.nth(1).locator('.xterm-screen').click()
+                    page.keyboard.type('second-pane')
+                    assert 'second-pane' == ''.join(inputs_by_session[second_sid][-11:])
+                    page.screenshot(path=str(preview / 'ssh-split.png'), full_page=True)
+                    page.click('#btn-term-split')
+                    assert '代理连接' in page.locator('#term-connection-status').inner_text()
+                    page.click('#btn-term-sftp')
+                    page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
+                    assert '代理连接' in page.locator('#sftp-route').inner_text()
+                    assert 'private-proxy-password' not in page.locator('#term-area').inner_text()
+                    # Concurrent per-VPS upload queues must not share target/progress/cancel state.
+                    page.evaluate("""() => {
+                        window.__NativeXHR = XMLHttpRequest; window.__parallelUploads = [];
+                        window.XMLHttpRequest = class {
+                            constructor() { this.upload = {}; window.__parallelUploads.push(this); }
+                            open(method, url) { this.url = url; } setRequestHeader() {}
+                            send(file) { this.file = file; }
+                            abort() { this.onabort(); }
+                        };
+                    }""")
+                    page.locator('#sftp-upload-input').set_input_files({'name':'second-vps.bin','mimeType':'application/octet-stream','buffer':b'b'})
                     page.click(f'#term-tabs [data-tsid="{first_sid}"]')
+                    page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
+                    assert not page.locator('#btn-sftp-upload').is_disabled()
+                    page.locator('#sftp-upload-input').set_input_files([
+                        {'name':'first-vps.bin','mimeType':'application/octet-stream','buffer':b'a'},
+                        {'name':'never-uploaded.bin','mimeType':'application/octet-stream','buffer':b'x'}])
+                    urls = page.evaluate('window.__parallelUploads.map(x => x.url)')
+                    assert parse_qs(urlparse(urls[0]).query)['session_id'] == [second_sid]
+                    assert parse_qs(urlparse(urls[1]).query)['session_id'] == [first_sid]
+                    page.evaluate("Object.assign(window.__parallelUploads[0],{status:200,responseText:'{}'}).onload()")
+                    assert 'first-vps.bin' in page.locator('#sftp-upload-label').inner_text()
+                    assert page.locator('#btn-sftp-upload').is_disabled()
+                    page.click('#btn-sftp-cancel')
+                    page.wait_for_function("!document.querySelector('#btn-sftp-upload').disabled")
+                    assert page.evaluate('window.__parallelUploads.length') == 2
+                    page.click(f'#term-tabs [data-tsid="{second_sid}"]')
+                    page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
+                    assert 'second-vps.bin' in page.locator('#sftp-upload-label').inner_text()
+                    assert '远程已确认' in page.locator('#sftp-upload-label').inner_text()
+                    page.evaluate('() => { window.XMLHttpRequest = window.__NativeXHR; }')
+                    pending_reads = []
+                    page.route('**/api/ssh/sftp/read?*', lambda route: pending_reads.append(route))
+                    page.locator('#sftp-table [data-fedit="demo.txt"]').click()
+                    page.wait_for_timeout(100)
+                    assert pending_reads
+                    page.click(f'#term-tabs [data-tsid="{first_sid}"]')
+                    pending_reads.pop().fulfill(content_type='application/json', body='{"content":"OTHER VPS PRIVATE CONTENT"}')
+                    page.wait_for_timeout(200)
+                    assert page.locator('#sftp-edit').is_hidden()
+                    assert 'OTHER VPS PRIVATE CONTENT' not in page.locator('#sftp-panel').inner_text()
+                    assert '直连' in page.locator('#sftp-route').inner_text()
+                    page.click('#btn-sftp-close')
                     page.wait_for_function("document.querySelector('#term-live-metrics').textContent.includes('12.5%')")
                     assert monitor_requests[-1] == int(first_sid)
                     page.locator(f'#term-tabs [data-tsid="{second_sid}"] + .term-close').click()
@@ -362,6 +475,12 @@ def main():
                     assert len(monitor_requests) == samples_after_close
                     page.locator('[data-sopen]').first.click()
                     page.locator('#term-area').wait_for(state="visible")
+                    assert page.locator('#term-stack').evaluate("el => el.style.getPropertyValue('--terminal-height')")
+                    retry_sid = page.locator('#term-tabs [data-tsid].active').get_attribute('data-tsid')
+                    terminal_routes[retry_sid].close()
+                    page.wait_for_function("!document.querySelector('#btn-term-retry').disabled")
+                    page.click('#btn-term-retry')
+                    page.wait_for_function("document.querySelector('#term-connection-status').textContent.startsWith('已连接')")
                     page.locator('.term-close').click()
                     page.click('#btn-theme')
                     assert page.locator('html').get_attribute('data-theme') == 'dark'
