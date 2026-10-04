@@ -52,13 +52,19 @@ def main():
                                 terminal_input.append(message)
                         ws.on_message(response)
                     page.route_web_socket(re.compile(r"/ws/ssh\?"), ssh_transport)
+                    monitor_requests = []
                     errors = []
                     page.on("pageerror", lambda error:errors.append(str(error)))
                     def replies(route):
                         path = route.request.url.split(base)[-1].split("?")[0]
                         if path.startswith(access_path):
                             path = "/" + path[len(access_path):]
-                        if path == "/api/ssh/sftp/list":
+                        if path == "/api/ssh/monitor":
+                            monitor_requests.append(route.request.post_data_json["session_id"])
+                            data = {"cpu":12.5,"mem":33,"disk":42,"net_rx_mb":100,"net_tx_mb":200}
+                        elif path == "/api/ssh/sftp/upload":
+                            data = {"ok":True,"size":len(route.request.post_data_buffer or b"")}
+                        elif path == "/api/ssh/sftp/list":
                             data = {"data":[{"name":"demo.txt","dir":False,"size":256,"mtime":0}]}
                         elif path == "/api/panel/metrics":
                             data = {"available":True,"scope":"host","cpu":11,"cores":1,
@@ -171,6 +177,12 @@ def main():
                     page.fill('#session-search','')
                     assert page.locator('.session-card').count() == 4
                     assert 'synthetic-browser-only' not in page.content()
+                    for button, panel in (("#btn-ssh-fwd", "#ssh-fwd-panel"), ("#btn-ssh-batch", "#ssh-batch"), ("#btn-ssh-monitor", "#ssh-monitor-panel")):
+                        page.click(button)
+                        assert page.locator(panel).is_visible()
+                        assert page.locator(panel).evaluate("el => el.parentElement.id") == "ssh-tools-dock"
+                        assert page.locator(panel).evaluate("el => el.getBoundingClientRect().top < innerHeight")
+                        page.click(button)
                     # Exercise actual xterm/close UI; only the remote SSH transport is simulated.
                     page.evaluate("""() => {
                         const Base = window.Terminal;
@@ -185,6 +197,18 @@ def main():
                     assert not errors, errors
                     page.wait_for_function("window.__testTerminals[0].buffer.active.getLine(0).translateToString().includes('Demo')", timeout=5000)
                     assert page.evaluate("document.querySelector('#view-ssh').firstElementChild.id") == "term-area"
+                    page.wait_for_function("document.querySelector('#term-live-metrics').textContent.includes('12.5%')")
+                    initial_samples = len(monitor_requests)
+                    page.wait_for_timeout(6000)
+                    assert len(monitor_requests) > initial_samples
+                    page.locator('.term-holder:visible .xterm-screen').hover()
+                    start_scroll = page.evaluate('scrollY')
+                    page.mouse.wheel(0, 3000)
+                    page.wait_for_timeout(200)
+                    assert abs(page.evaluate('scrollY') - start_scroll) < 2
+                    page.mouse.wheel(0, -3000)
+                    page.wait_for_timeout(200)
+                    assert abs(page.evaluate('scrollY') - start_scroll) < 2
                     page.context.grant_permissions(["clipboard-read", "clipboard-write"])
                     page.evaluate("window.__testTerminals[0].select(0, 0, 4)")
                     page.locator('.term-holder:visible .xterm-screen').click(button="right", position={"x":20,"y":10})
@@ -224,9 +248,39 @@ def main():
                     assert popup.url == "https://example.com/test"
                     assert popup.evaluate("window.opener === null")
                     popup.close()
+                    page.evaluate("() => new Promise(resolve => window.__testTerminals[0].write('line\\r\\n'.repeat(180), resolve))")
+                    page.evaluate('window.__testTerminals[0].scrollToBottom()')
+                    before_buffer = page.evaluate('window.__testTerminals[0].buffer.active.viewportY')
+                    before_page = page.evaluate('scrollY')
+                    page.locator('.term-holder:visible .xterm-screen').hover()
+                    page.mouse.wheel(0, -400)
+                    page.wait_for_timeout(250)
+                    assert page.evaluate('window.__testTerminals[0].buffer.active.viewportY') < before_buffer
+                    assert abs(page.evaluate('scrollY') - before_page) < 2
                     page.click('#btn-term-sftp')
                     page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
                     assert page.evaluate("document.querySelector('#sftp-panel').parentElement.id") == "term-area"
+                    # Native XHR uploads, then deterministic intermediate progress and error checks.
+                    page.locator('#sftp-upload-input').set_input_files({"name":"native.bin","mimeType":"application/octet-stream","buffer":b'abc' * 2048})
+                    page.wait_for_function("document.querySelector('#sftp-upload-label').textContent.includes('远程已确认')")
+                    page.evaluate("""() => {
+                      window.__NativeXHR = XMLHttpRequest;
+                      window.XMLHttpRequest = class {
+                        constructor() { this.upload = {}; window.__uploadXHR = this; }
+                        open() {} setRequestHeader() {}
+                        send(file) { this.file = file; }
+                      };
+                    }""")
+                    page.locator('#sftp-upload-input').set_input_files({"name":"progress.bin","mimeType":"application/octet-stream","buffer":b'x' * 100})
+                    page.evaluate("window.__uploadXHR.upload.onprogress({lengthComputable:true,loaded:50,total:100})")
+                    assert page.locator('#sftp-upload-meter').evaluate('el => el.value') == 50
+                    page.evaluate("window.__uploadXHR.upload.onprogress({lengthComputable:true,loaded:100,total:100})")
+                    assert '等待远程写入确认' in page.locator('#sftp-upload-label').inner_text()
+                    assert page.locator('#btn-sftp-upload').is_disabled()
+                    page.evaluate("Object.assign(window.__uploadXHR,{status:409,responseText:JSON.stringify({detail:'同名文件'})}).onload()")
+                    page.wait_for_function("!document.querySelector('#btn-sftp-upload').disabled")
+                    assert '上传失败' in page.locator('#sftp-upload-label').inner_text()
+                    page.evaluate('() => { window.XMLHttpRequest = window.__NativeXHR; }')
                     page.click('#btn-theme')
                     page.wait_for_function("window.__testTerminals[0].options.theme.background === '#202020'")
                     page.click('#btn-theme')
@@ -239,10 +293,29 @@ def main():
                     page.locator('#sftp-panel').wait_for(state="hidden")
                     page.click('#btn-term-fullscreen')
                     page.wait_for_function("document.querySelector('#term-area').classList.contains('terminal-fullscreen')")
+                    assert page.evaluate("getComputedStyle(document.documentElement).overflow") == 'hidden'
+                    fullscreen_scroll = page.evaluate('scrollY')
+                    page.locator('.term-holder:visible .xterm-screen').hover()
+                    page.mouse.wheel(0, 3000)
+                    page.wait_for_timeout(200)
+                    assert page.evaluate('scrollY') == fullscreen_scroll
                     page.keyboard.press("Escape")
+                    assert page.evaluate("getComputedStyle(document.documentElement).overflow") != 'hidden'
                     assert not page.locator('.terminal-fullscreen').count()
+                    first_sid = page.locator('#term-tabs [data-tsid].active').get_attribute('data-tsid')
+                    page.locator('[data-sopen]').nth(1).click()
+                    second_sid = page.locator('#term-tabs [data-tsid].active').get_attribute('data-tsid')
+                    page.wait_for_function("document.querySelector('#term-live-metrics').textContent.includes('12.5%')")
+                    assert monitor_requests[-1] == int(second_sid) and second_sid != first_sid
+                    page.click(f'#term-tabs [data-tsid="{first_sid}"]')
+                    page.wait_for_function("document.querySelector('#term-live-metrics').textContent.includes('12.5%')")
+                    assert monitor_requests[-1] == int(first_sid)
+                    page.locator(f'#term-tabs [data-tsid="{second_sid}"] + .term-close').click()
                     page.locator('.term-close').click()
                     page.locator('#term-area').wait_for(state="hidden")
+                    samples_after_close = len(monitor_requests)
+                    page.wait_for_timeout(5500)
+                    assert len(monitor_requests) == samples_after_close
                     page.locator('[data-sopen]').first.click()
                     page.locator('#term-area').wait_for(state="visible")
                     page.locator('.term-close').click()
@@ -276,7 +349,7 @@ def main():
                     page.locator("#view-login").wait_for(state="visible")
                     assert not errors, errors
                     browser.close()
-                print("PASS: Chrome login, cloud cards, diagnostics, sessions, terminal right-click copy, Ctrl-click link, SFTP dock, live theme, fullscreen, close/reopen, mobile layout and password change; cloud/SSH transport simulated")
+                print("PASS: Chrome login, cloud cards, diagnostics, sessions, terminal right-click copy, Ctrl-click link, SFTP dock, live theme, fullscreen, close/reopen, mobile layout, password change, upload progress/errors, scroll containment, tool panels and live metrics switching/stop; cloud/SSH transport simulated")
             finally:
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
