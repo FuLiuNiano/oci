@@ -134,7 +134,7 @@ html.terminal-scroll-lock,html.terminal-scroll-lock body{overflow:hidden!importa
 
 #sftp-upload-progress.upload-error{color:var(--err)}
 #sftp-upload-progress.upload-error progress{accent-color:var(--err)}
-#sftp-file-list{max-height:360px;overflow:auto;overscroll-behavior:contain;min-height:0}
+#sftp-file-list{max-height:520px;overflow:auto;overscroll-behavior:contain;min-height:0}
 #sftp-file-list th{position:sticky;top:0;z-index:1}
 #sftp-path,#sftp-status{overflow-wrap:anywhere}
 #sftp-status:empty{display:none}
@@ -147,14 +147,17 @@ html.terminal-scroll-lock,html.terminal-scroll-lock body{overflow:hidden!importa
 .terminal-fullscreen #term-stack{flex:2 1 55%;min-height:120px}
 .terminal-fullscreen #term-stack[style*="--terminal-height"]{flex:0 0 var(--terminal-height);height:var(--terminal-height)}
 .terminal-fullscreen #term-stack .term-holder{height:100%}
-.terminal-fullscreen #sftp-panel{display:flex;flex-direction:column;flex:1 1 35%;max-height:none;min-height:150px;overflow:auto}
+.terminal-fullscreen #sftp-panel{display:flex;flex-direction:column;flex:1 1 42%;max-height:none;min-height:150px;overflow:auto}
 .terminal-fullscreen #sftp-file-list{flex:1 1 auto;max-height:none;min-height:70px}
-#sftp-panel .section-heading{gap:12px;margin-bottom:10px;flex-wrap:wrap;flex-shrink:0}
+#sftp-panel{padding:10px 12px}
+.terminal-workspace #sftp-panel{padding:8px 12px}
+#sftp-panel .section-heading{gap:8px;margin-bottom:5px;flex-wrap:wrap;flex-shrink:0}
 #sftp-panel .section-heading h3{font-size:15px;flex:1;overflow-wrap:anywhere}
 #sftp-panel .section-heading button{margin-left:auto}
-#sftp-panel .bar{gap:8px;flex-shrink:0}
-#sftp-panel button{padding:7px 11px;font-size:12px}
-#sftp-file-list td,#sftp-file-list th{padding:10px 12px}
+#sftp-panel .bar{gap:6px;margin-bottom:5px;flex-shrink:0}
+#sftp-panel button{padding:3px 8px;font-size:11px;line-height:1.5;min-height:26px;box-shadow:2px 2px 0 #000!important}
+#sftp-panel input:not([type=checkbox]):not([type=file]){padding:3px 7px;font-size:12px;height:28px}
+#sftp-file-list td,#sftp-file-list th{padding:6px 10px}
 #sftp-path{font-family:Consolas,monospace;max-width:100%}
 .route-label{font-size:12px;color:var(--muted)}
 .terminal-extra{display:flex;align-items:center;gap:8px;padding:5px 12px;background:var(--panel);font-size:11px;flex-shrink:0}
@@ -165,10 +168,11 @@ html.terminal-scroll-lock,html.terminal-scroll-lock body{overflow:hidden!importa
 #term-stack.split .term-holder{position:relative;padding-top:32px;min-width:0;outline:2px solid transparent;outline-offset:-2px}
 #term-stack.split .term-holder::before{content:attr(data-session);position:absolute;top:4px;left:16px;right:16px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
 #term-stack.split .selected-pane{outline-color:var(--manga-accent)}
+#term-stack .term-mount{height:100%;width:100%;min-height:0;overflow:hidden}
 .terminal-fullscreen #term-stack.split .term-holder{height:var(--terminal-height,350px)}
-#sftp-breadcrumb{position:static;display:flex;flex-wrap:wrap;width:auto;padding:0;margin:0 0 8px;gap:5px;align-items:center;border:0;background:none;min-height:0;flex-shrink:0}
-#sftp-breadcrumb button{min-height:0;font-size:11px;padding:3px 7px}
-#sftp-drop{border:2px dashed var(--muted);padding:7px;margin-bottom:8px;font-size:12px;color:var(--muted);flex-shrink:0}
+#sftp-breadcrumb{position:static;display:flex;flex-flow:row wrap;justify-content:flex-start;width:auto;padding:0;margin:0 0 4px;gap:4px;align-items:center;border:0;background:none;min-height:0;flex-shrink:0}
+#sftp-breadcrumb button{min-height:0;font-size:11px;padding:1px 5px;box-shadow:none!important}
+#sftp-drop{border:1px dashed var(--muted);padding:3px 7px;margin-bottom:5px;font-size:11px;color:var(--muted);flex-shrink:0}
 #sftp-drop.dragging{background:var(--manga-accent);color:#111}
 #sftp-table input[type=checkbox]{width:auto;margin:0 7px 0 0}
 @media(max-width:650px){#term-stack.split{grid-template-columns:1fr}.terminal-history{flex-wrap:wrap}.terminal-extra{flex-wrap:wrap}}

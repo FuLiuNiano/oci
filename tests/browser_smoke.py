@@ -18,6 +18,15 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def assert_terminal_content_fits(page):
+    page.wait_for_function("""() => [...document.querySelectorAll('.term-holder:not(.hide)')].every(holder => {
+        const mount = holder.querySelector('.term-mount').getBoundingClientRect();
+        const screen = holder.querySelector('.xterm-screen').getBoundingClientRect();
+        const frame = holder.getBoundingClientRect();
+        return screen.height > 0 && screen.bottom <= mount.bottom + 1 && screen.right <= mount.right + 1 && mount.bottom <= frame.bottom + 1;
+    })""")
+
+
 def main():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -229,6 +238,7 @@ def main():
                     page.mouse.move(rect['x'] + rect['width']/2, rect['y'] + rect['height']/2 - 80, steps=8)
                     page.mouse.up()
                     assert page.locator('#term-stack').evaluate('el => el.clientHeight') < height_before - 50
+                    assert_terminal_content_fits(page)
                     initial_samples = len(monitor_requests)
                     page.wait_for_timeout(6000)
                     assert len(monitor_requests) > initial_samples
@@ -382,6 +392,7 @@ def main():
                     page.mouse.wheel(0, 3000)
                     page.wait_for_timeout(200)
                     assert page.evaluate('scrollY') == fullscreen_scroll
+                    assert_terminal_content_fits(page)
                     page.click('#btn-term-sftp')
                     page.locator('#sftp-table [data-fopen="demo.txt"]').wait_for()
                     page.locator('#sftp-file-list').hover()
@@ -396,6 +407,16 @@ def main():
                     for _ in range(30): page.keyboard.press('ArrowDown')
                     assert page.locator('#sftp-panel').evaluate('el => el.getBoundingClientRect().bottom <= innerHeight + 2')
                     for _ in range(8): page.keyboard.press('ArrowUp')
+                    assert_terminal_content_fits(page)
+                    assert page.locator('#btn-sftp-upload').evaluate('el => el.getBoundingClientRect().height') <= 30
+                    assert page.locator('#sftp-file-list').evaluate('el => el.clientHeight') >= 140
+                    assert page.locator('#sftp-breadcrumb').evaluate("el => getComputedStyle(el).flexDirection") == 'row'
+                    page.evaluate("() => new Promise(resolve => window.__testTerminals[0].write('\\r\\nLAST-PROMPT> ', resolve))")
+                    page.evaluate('window.__testTerminals[0].scrollToBottom()')
+                    page.locator('#term-splitter').focus()
+                    page.keyboard.press('ArrowUp')
+                    assert_terminal_content_fits(page)
+                    assert page.evaluate('window.__testTerminals[0].buffer.active.viewportY === window.__testTerminals[0].buffer.active.baseY')
                     page.screenshot(path=str(preview / "sftp-fullscreen.png"))
                     page.click('#btn-sftp-close')
                     page.keyboard.press("Escape")
@@ -408,6 +429,7 @@ def main():
                     assert monitor_requests[-1] == int(second_sid) and second_sid != first_sid
                     page.click('#btn-term-split')
                     assert page.locator('.term-holder:visible').count() == 2
+                    assert_terminal_content_fits(page)
                     holders = page.locator('.term-holder:visible')
                     holders.first.locator('.xterm-screen').click()
                     page.keyboard.type('first-pane')

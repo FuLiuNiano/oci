@@ -443,6 +443,10 @@
     holder.className = "term-holder hide";
     holder.id = "term-" + sid;
     $("#term-stack").appendChild(holder);
+    // FitAddon measures its direct parent's height; give it the actual content box.
+    const mount = document.createElement('div');
+    mount.className = 'term-mount';
+    holder.appendChild(mount);
 
     const term = new Terminal({ cursorBlink: true, fontSize: 14,
       fontFamily: '"Cascadia Mono", Consolas, "Liberation Mono", monospace', theme: terminalTheme(),
@@ -462,9 +466,15 @@
       }
       return true;
     });
-    const fit = new FitAddon.FitAddon();
-    term.loadAddon(fit);
-    term.open(holder);
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(mount);
+    const fit = {fit() {
+      if (!mount.clientWidth || !mount.clientHeight) return;
+      const atBottom = term.buffer.active.viewportY >= term.buffer.active.baseY;
+      fitAddon.fit();
+      if (atBottom) term.scrollToBottom();
+    }};
     fit.fit();
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -511,7 +521,7 @@
     const resize = () => { if (sid === activeSid || splitMode) fit.fit(); };
     window.addEventListener("resize", resize);
     const sizeObserver = new ResizeObserver(() => { if ((sid === activeSid || splitMode) && holder.clientWidth) fit.fit(); });
-    sizeObserver.observe(holder);
+    sizeObserver.observe(mount);
 
     terminals[sid] = { term, ws, fit, tabBtn, holder, closeBtn, resize, sizeObserver, session: {...sess} };
     activateTab(sid);
