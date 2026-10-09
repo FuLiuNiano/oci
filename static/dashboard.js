@@ -33,6 +33,11 @@
     } finally { metricPending = false; }
   }
   let chosenAccount = "";
+  let diagnosticGeneration = 0, monitorGeneration = 0;
+  function resetDiagnostics() { diagnosticGeneration++; $('#diagnostic-results').textContent = '点击检查当前账号'; }
+  function resetMonitor() { monitorGeneration++; $('#cloud-monitor-results').textContent = '点击读取当前账号的监控数据'; }
+  $('#check-account').addEventListener('change', resetDiagnostics);
+  $('#monitor-account').addEventListener('change', resetMonitor);
   let requestGeneration = 0;
   const sections = ["usage", "traffic", "regions", "stats"];
   function resetCards() {
@@ -40,6 +45,7 @@
     sections.forEach(k => $("#summary-" + k).textContent = "点击读取实时云数据");
   }
   window.syncDashboardAccounts = function () {
+    resetDiagnostics(); resetMonitor();
     for (const id of ["#dashboard-account", "#check-account", "#monitor-account"]) {
       const el = $(id), prev = el.value;
       el.innerHTML = state.accounts.map(a => `<option value="${a.id}">${esc(a.name)} · ${esc(a.region)}</option>`).join("") || '<option value="">先添加 OCI 账号</option>';
@@ -93,25 +99,30 @@
     finally { $("#btn-check-all").disabled = false; }
   });
   $("#btn-account-check").addEventListener("click", async () => {
+    const generation = diagnosticGeneration;
     const id = $("#check-account").value; if (!id) { toast("请先添加 OCI 账号", false); return; }
     const box = $("#diagnostic-results"); box.textContent = "检查中…";
     $("#btn-account-check").disabled = true;
     try {
       const r = await api(`/api/accounts/${id}/check`, {method:"POST"});
+      if (generation !== diagnosticGeneration) return;
       box.classList.remove("empty-state");
       box.innerHTML = `<div class="section-heading"><h3>${esc(r.account_name)}</h3><span class="chip">${esc(r.region)}</span></div>${r.checks.map(c => `<div class="check-row"><span class="check-indicator ${c.ok ? "success" : "err"}">${uiIcon(c.ok ? "check" : "close")}</span><div><b>${esc(c.name)}</b><p>${esc(c.message)}</p></div><span class="badge ${c.ok ? "b-ok" : "b-err"}">${c.ok ? "通过" : "失败"}</span></div>`).join("")}`;
-    } catch (e) { box.textContent = e.message; }
+    } catch (e) { if (generation === diagnosticGeneration) box.textContent = e.message; }
     finally { $("#btn-account-check").disabled = false; }
   });
   $("#btn-cloud-monitor").addEventListener("click", async () => {
+    const generation = monitorGeneration;
     const id = $("#monitor-account").value; if (!id) { toast("请先添加 OCI 账号", false); return; }
     const box = $("#cloud-monitor-results"); box.textContent = "读取中…";
     $("#btn-cloud-monitor").disabled = true;
     try {
       const [instances, traffic] = await Promise.all([api(`/api/cloud/oci/instances?account_id=${id}`), api(`/api/accounts/${id}/traffic`)]);
+      if (generation !== monitorGeneration) return;
       box.classList.remove("empty-state");
       box.innerHTML = `<div class="section-heading"><h3>近 24 小时出站 ${traffic.total_gb.toFixed(2)} GB</h3><span class="muted">${new Date().toLocaleTimeString()} 更新</span></div><div class="table-wrap"><table><thead><tr><th>实例</th><th>状态</th><th>规格</th><th>出站流量</th></tr></thead><tbody>${instances.data.map(i => `<tr><td>${esc(i.name)}</td><td><span class="badge ${i.state === "RUNNING" ? "b-ok" : "b-mid"}">${esc(i.state)}</span></td><td>${esc(i.spec || i.shape)}</td><td>${Object.prototype.hasOwnProperty.call(traffic.per_resource, i.id) ? traffic.per_resource[i.id].toFixed(3) + " GB" : "无数据"}</td></tr>`).join("") || '<tr><td colspan="4">当前区域没有实例</td></tr>'}</tbody></table></div>`;
-    } catch (e) { box.textContent = e.message; }
+      box.insertAdjacentHTML('beforeend', '<p class="muted">当前挂载网卡的出站统计，包含内网流量，不等同于公网计费流量；缺少监控数据不代表没有流量。</p>');
+    } catch (e) { if (generation === monitorGeneration) box.textContent = e.message; }
     finally { $("#btn-cloud-monitor").disabled = false; }
   });
   VIEW_LOADERS.diagnostics = () => {};

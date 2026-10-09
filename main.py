@@ -24,6 +24,7 @@ import store
 import sshpool
 import tasks
 import webapi
+import gcp_api
 from deps import COOKIE, make_token, verify_pw
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -107,6 +108,7 @@ def health():
 
 
 app.include_router(webapi.api)
+app.include_router(gcp_api.api)
 
 
 # ---------- Web SSH WebSocket ----------

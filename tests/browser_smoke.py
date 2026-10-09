@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from playwright.sync_api import sync_playwright
+from browser_oci_isolation import check_oci_account_switching
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,8 +36,17 @@ def main():
         env = dict(os.environ, HOST="127.0.0.1", PORT=str(port), PANEL_DATA_DIR=directory,
                    COOKIE_SECURE="0", PYTHONIOENCODING="utf-8")
         with open(Path(directory) / "server.log", "w", encoding="utf-8") as log:
-            proc = subprocess.Popen([sys.executable, str(ROOT / "main.py")], cwd=ROOT,
-                                    env=env, stdout=log, stderr=log)
+            launcher = """import os, sys, threading, uvicorn, main, tasks
+tasks.start = lambda: None
+server = uvicorn.Server(uvicorn.Config(main.app, host='127.0.0.1', port=int(os.environ['PORT'])))
+def stop():
+    sys.stdin.read(1)
+    server.should_exit = True
+threading.Thread(target=stop, daemon=True).start()
+server.run()
+"""
+            proc = subprocess.Popen([sys.executable, '-c', launcher], cwd=ROOT,
+                                    env=env, stdout=log, stderr=log, stdin=subprocess.PIPE)
             try:
                 base = f"http://127.0.0.1:{port}"
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -164,6 +174,7 @@ def main():
                     page.fill("#a-name","edited-browser-account")
                     page.click("#btn-save-account")
                     page.locator("#account-form").wait_for(state="hidden")
+                    check_oci_account_switching(page)
                     page.click('nav button[data-view="instances"]')
                     page.locator('#inst-cards button[data-act="REBOOT"]').wait_for()
                     assert "50 GB" in page.locator("#inst-cards").inner_text()
@@ -549,16 +560,11 @@ def main():
                     browser.close()
                 print("PASS: Chrome login, cloud cards, diagnostics, sessions, terminal right-click copy, Ctrl-click link, SFTP dock, live theme, fullscreen, close/reopen, mobile layout, password change, upload progress/errors, scroll containment, tool panels and live metrics switching/stop; cloud/SSH transport simulated")
             finally:
-                if os.name == "nt":
-                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=5)
+                if proc.poll() is None:
+                    proc.stdin.write(b'x')
+                    proc.stdin.flush()
+                proc.wait(timeout=20)
+                proc.stdin.close()
 
 
 if __name__ == "__main__":

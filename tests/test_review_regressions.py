@@ -15,6 +15,48 @@ import webapi
 from test_ssh import ssh_server
 
 
+def test_traffic_instance_failure_does_not_skip_next_account(account, monkeypatch):
+    import json
+    second = store.execute('INSERT INTO accounts(name,region,params,traffic_limit_gb) VALUES(?,?,?,?)',
+        ('second',account['region'],json.dumps(account['params']),1))
+    store.execute('UPDATE accounts SET traffic_limit_gb=1 WHERE id=?',(account['id'],))
+    monkeypatch.setattr(oci_service,'traffic_usage_gb',lambda *a,**kw:{'total_gb':2,'per_resource':{}})
+    visited=[]
+    def instances(acct):
+        visited.append(acct['id'])
+        if acct['id']==account['id']: raise oci_service.OciTransportError('failed proxy')
+        return []
+    monkeypatch.setattr(oci_service,'list_instances',instances)
+    monkeypatch.setattr(tasks.notify,'send',lambda *args:None)
+    tasks._tick_traffic()
+    assert visited == [account['id'],second]
+
+
+def test_vnic_traffic_groups_multiple_nics_and_ignores_other_instances(sdk, account):
+    import oci
+    data,calls=sdk
+    data['list_vnic_attachments']=[oci.core.models.VnicAttachment(vnic_id=v,instance_id='instance1',lifecycle_state='ATTACHED') for v in ('nic1','nic2')]
+    data['get_vnic']=lambda *args,**kwargs: oci.response.Response(200,{},
+        oci.core.models.Vnic(id=kwargs['path_params']['vnicId'],compartment_id='network-comp'),None)
+    data['summarize_metrics_data']=[oci.monitoring.models.MetricData(dimensions={'resourceId':v},
+        aggregated_datapoints=[oci.monitoring.models.AggregatedDatapoint(value=n*1e9)]) for v,n in [('nic1',1),('nic2',2),('unrelated-nic',500)]]
+    assert oci_service.traffic_usage_gb(account)=={'total_gb':3,'per_resource':{'instance1':3}}
+
+
+def test_change_ip_partial_failure_is_explicit(sdk, account, monkeypatch):
+    import oci
+    from test_oci import network
+    data,calls=sdk
+    network(data)
+    data['get_public_ip_by_private_ip_id']=oci.core.models.PublicIp(id='old',lifetime='EPHEMERAL')
+    data['delete_public_ip']=None
+    data['create_public_ip']=oci.exceptions.ServiceError(429,'LimitExceeded',{},'quota')
+    monkeypatch.setattr(oci_service.time,'sleep',lambda _:None)
+    with pytest.raises(oci_service.OciError,match='旧临时公网 IP 已删除'):
+        oci_service.change_public_ip(account,'instance1')
+    assert len([c for c in calls if c[0]=='delete_public_ip'])==1
+
+
 @pytest.mark.parametrize("operation", ["stop", "delete"])
 def test_cancel_queued_launch_during_previous_launch(client, account, monkeypatch, operation):
     ids = [client.post('/api/launch-tasks', json={

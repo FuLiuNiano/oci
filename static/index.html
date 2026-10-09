@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="static/style.css">
 <link rel="stylesheet" href="static/manga-layout.css">
 <link rel="stylesheet" href="static/manga.css">
+<link rel="stylesheet" href="static/gcp.css">
 </head>
 <body>
 <header>
@@ -51,6 +52,7 @@
   <button data-view="domains">域名监控</button>
   <button data-view="mail">邮件服务</button>
   <button data-view="accounts">云账号</button>
+  <button data-view="gcp">GCP 管理</button>
   <button data-view="settings">设置</button>
 </nav>
 <!-- 概览 -->
@@ -412,6 +414,38 @@
       <div><label>新密码（至少 32 位）</label><input id="p-new" type="password" autocomplete="new-password"></div>
     </div><button id="btn-save-pass" style="margin-top:10px">修改密码</button></div>
 </section>
+<section id="view-gcp" class="view hide">
+  <div class="page-heading"><div><span class="eyebrow">GOOGLE CLOUD / COMPUTE ENGINE</span><h1>GCP 管理</h1><p>独立账号、项目与连接线路。</p></div><button id="gcp-new">添加 GCP 账号</button></div>
+  <div class="card"><div class="bar"><label for="gcp-account">GCP 账号</label><select id="gcp-account"><option value="">请添加账号</option></select><span id="gcp-route" class="muted"></span><button id="gcp-edit" class="ghost">编辑</button><button id="gcp-remove" class="ghost">移除账号</button></div><p id="gcp-identity" class="muted"></p></div>
+  <form id="gcp-account-form" class="card hide" autocomplete="off">
+    <h3 id="gcp-form-title">添加 GCP 账号</h3><div class="form-grid">
+    <div><label for="gcp-name">账号名称</label><input id="gcp-name" required maxlength="100"></div>
+    <div><label for="gcp-project">项目 ID</label><input id="gcp-project" required placeholder="my-project-123"></div>
+    <div><label for="gcp-json-file">服务账号 JSON 密钥文件</label><input id="gcp-json-file" type="file" accept=".json,application/json"></div>
+    <div><label for="gcp-proxy">GCP API 代理（可选，失败禁止直连）</label><input id="gcp-proxy" placeholder="socks5h://地址:1080 或 http://地址:端口"><label><input id="gcp-direct" type="checkbox"> 编辑时移除原代理，改为直连</label></div>
+    </div><label for="gcp-json">或粘贴服务账号 JSON（编辑时留空保留密钥）</label><textarea id="gcp-json" rows="4" spellcheck="false"></textarea>
+    <p class="muted">密钥只保存在服务器本地，不会回传到页面。编辑时代理留空会保留原配置。</p><div class="bar"><button type="submit">保存账号</button><button type="button" id="gcp-cancel-account" class="ghost">取消</button></div>
+  </form>
+  <div class="card"><div class="bar"><button id="gcp-refresh">刷新实例 / 测试连接</button><button id="gcp-open-create">创建实例</button><button id="gcp-open-sync">同步到 SSH</button><button id="gcp-traffic">近 90 天流量</button></div><p id="gcp-message" role="status">请添加或选择 GCP 账号，再刷新实例。</p><div id="gcp-summary" class="gcp-summary"></div></div>
+  <form id="gcp-create-form" class="card hide">
+    <h3>创建 GCP 实例</h3><div class="form-grid">
+    <div><label for="gcp-vm-name">实例名称</label><input id="gcp-vm-name" required pattern="[a-z][a-z0-9-]*" value="gcp-vm"></div>
+    <div><label for="gcp-zone">可用区</label><select id="gcp-zone" required></select></div>
+    <div><label for="gcp-machine">机型</label><select id="gcp-machine" required></select></div>
+    <div><label for="gcp-image">系统镜像</label><select id="gcp-image"><option value="debian-12">Debian 12</option><option value="ubuntu-2404">Ubuntu 24.04 LTS</option></select></div>
+    <div><label for="gcp-disk">启动磁盘（GB，pd-balanced）</label><input id="gcp-disk" type="number" min="10" max="2048" value="20" required></div>
+    <div><label for="gcp-network">VPC 网络</label><select id="gcp-network" required></select></div>
+    <div><label for="gcp-subnet">子网</label><select id="gcp-subnet"></select></div>
+    <div><label for="gcp-user">SSH 用户名</label><input id="gcp-user" value="debian" required pattern="[a-z_][a-z0-9_-]{0,31}"></div>
+    </div><label for="gcp-key">SSH 公钥</label><textarea id="gcp-key" required rows="2" placeholder="ssh-ed25519 AAAA…"></textarea>
+    <label><input id="gcp-public" type="checkbox" checked> 分配临时公网 IPv4</label>
+    <p class="muted">创建资源可能收费；本页不保证免费额度。启动磁盘默认保留。请确保 VPC 允许 SSH 入站；项目启用 OS Login 时需按该方式授权登录。</p>
+    <div class="bar"><button type="submit">确认创建</button><button id="gcp-cancel-create" type="button" class="ghost">取消</button></div>
+  </form>
+  <form id="gcp-sync-form" class="card hide"><h3>同步 GCP 实例到 SSH</h3><div class="form-grid"><div><label for="gcp-sync-user">SSH 用户名</label><input id="gcp-sync-user" value="debian" required></div><div><label for="gcp-sync-proxy">新 SSH 会话的代理（留空直连）</label><input id="gcp-sync-proxy" placeholder="socks5h://地址:端口"></div></div><label><input id="gcp-sync-private" type="checkbox"> 无公网 IP 时使用内网 IP（需面板可访问该网络）</label><p class="muted">GCP API 线路和 SSH 线路分别设置。已有会话保留认证与线路，IP 变化需手动编辑地址。新会话同步后请填写 SSH 私钥。</p><div class="bar"><button type="submit">确认同步</button><button id="gcp-cancel-sync" type="button" class="ghost">取消</button></div></form>
+  <div id="gcp-instances" class="gcp-instances"></div>
+  <div id="gcp-traffic-panel" class="card hide"><h3>近 90 天实例网卡流量</h3><p id="gcp-traffic-summary"></p><p class="muted">来自 Cloud Monitoring 的网卡收发字节，不等同于计费流量。没有监控数据时显示空记录。</p><div class="gcp-table-wrap"><table><thead><tr><th>日期（UTC）</th><th>实例 ID</th><th>接收</th><th>发送</th></tr></thead><tbody id="gcp-traffic-rows"></tbody></table></div></div>
+</section>
 </main>
 
 <div id="toast" class="toast"></div>
@@ -421,6 +455,7 @@
 <script src="static/cloud.js"></script>
 <script src="static/webssh.js"></script>
 <script src="static/dashboard.js"></script>
+<script src="static/gcp.js"></script>
 
 </body>
 </html>

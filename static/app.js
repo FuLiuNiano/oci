@@ -151,6 +151,7 @@ async function reloadAccounts() {
     if (prev && state.accounts.some(a => String(a.id) === prev)) sel.value = prev;
   }
   state.instAccount = $("#inst-account").value;
+  window.invalidateOciViews && window.invalidateOciViews();
   window.syncSshSessionSelects && window.syncSshSessionSelects();
   renderAccounts();
   window.syncDashboardAccounts && window.syncDashboardAccounts();

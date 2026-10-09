@@ -3,10 +3,40 @@
   const instAccount = () => Number($("#inst-account").value || 0);
   const acctById = id => state.accounts.find(a => a.id === Number(id));
   const bootCache = new Map();
+  const accountEpochs = new Map();
+  function accountGuard(selector) {
+    const value = $(selector).value, epoch = accountEpochs.get(selector) || 0;
+    return () => $(selector).value === value && (accountEpochs.get(selector) || 0) === epoch;
+  }
+  const ownedViews = {
+    '#inst-account': ['#inst-cards', '#inst-summary'],
+    '#l-account': ['#l-ad', '#l-subnet'],
+    '#a1-account': ['#a1-result', '#a1-table tbody'],
+    '#vol-account': ['#vol-table tbody', '#bvol-table tbody'],
+    '#net-account': ['#net-instance', '#rip-table tbody', '#net-result'],
+    '#usr-account': ['#usr-table tbody', '#uk-table tbody'],
+    '#os-account': ['#os-buckets tbody', '#os-table tbody', '#os-cur'],
+  };
+  function invalidateAccountView(selector) {
+    accountEpochs.set(selector, (accountEpochs.get(selector) || 0) + 1);
+    ownedViews[selector].forEach(s => $(s).replaceChildren());
+    if (selector === '#l-account') $('#l-bootvol').value = '';
+    if (selector === '#vol-account') { $('#newvol-form').classList.add('hide'); $('#nv-ad').value = ''; }
+    if (selector === '#usr-account') {
+      $('#usr-keys').classList.add('hide'); $('#usr-new-form').classList.add('hide');
+      delete $('#uk-name').dataset.uid; $('#uk-pem').value = '';
+    }
+    if (selector === '#os-account') {
+      curBucket = ''; $('#os-files').classList.add('hide'); $('#os-file').value = ''; $('#os-objname').value = '';
+    }
+  }
+  Object.keys(ownedViews).forEach(selector => $(selector).addEventListener('change', () => invalidateAccountView(selector), true));
+  window.invalidateOciViews = () => { bootCache.clear(); Object.keys(ownedViews).forEach(invalidateAccountView); };
 
   /* ================= 实例 ================= */
 
   window.loadInstances = async function (silent = false) {
+    const valid = accountGuard('#inst-account');
     if (!state.instAccount) return;
     if (!silent) $("#inst-summary").textContent = "加载中…";
     try {
@@ -25,7 +55,7 @@
       const [r, boot] = await Promise.all([
         api(url), bootRequest,
       ]);
-      if (instAccount() !== acct.id) return;
+      if (!valid() || instAccount() !== acct.id) return;
       renderInstances(platform, acct, r.data, boot.data);
       if (!silent) $("#inst-summary").textContent = "";
     } catch (e) {
@@ -202,10 +232,12 @@
   });
 
   window.fillLaunchMeta = async function () {
+    const valid = accountGuard('#l-account');
     const acct = acctById($("#l-account").value);
     if (!acct || acct.platform !== "oci") return;
     try {
       const r = await api(`/api/oc-info?account_id=${acct.id}`);
+      if (!valid()) return;
       $("#l-ad").innerHTML = `<option value="">自动轮换</option>` +
         r.ads.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join("");
       $("#l-subnet").innerHTML = `<option value="">自动选择（优先公网子网）</option>` +
@@ -274,8 +306,10 @@
   });
 
   $("#btn-a1").addEventListener("click", async () => {
+    const valid = accountGuard('#a1-account');
     try {
       const r = await api(`/api/oci/a1-checkup?account_id=${$("#a1-account").value}`);
+      if (!valid()) return;
       $("#a1-result").textContent =
         `A1 总量 ${r.total_ocpus}C/${r.total_mem}G（当前区域参考上限 ${r.limit_ocpus}C/${r.limit_mem}G）` +
         (r.over_ocpus || r.over_mem ? " ⚠️ 超额！" : " ✅ 未超额");
@@ -301,6 +335,7 @@
   /* ================= 硬盘 ================= */
 
   window.loadVolumes = async function (silent = false) {
+    const valid = accountGuard('#vol-account');
     const aid = $("#vol-account").value;
     if (!aid) return;
     try {
@@ -308,6 +343,7 @@
         api(`/api/oci/boot-volumes?account_id=${aid}`),
         api(`/api/oci/block-volumes?account_id=${aid}`),
       ]);
+      if (!valid()) return;
       const gb = v => v == null ? "-" : v;
       $("#vol-table tbody").innerHTML = b.data.map(v => `<tr>
         <td>${esc(v.name)}</td><td>${gb(v.size_gbs)}</td><td>${gb(v.size_used_gbs)}</td><td>${gb(v.vpus)}</td>
@@ -329,11 +365,13 @@
   $("#btn-refresh-vol").addEventListener("click", () => loadVolumes());
 
   $("#btn-newvol").addEventListener("click", async () => {
+    const valid = accountGuard('#vol-account');
     $("#newvol-form").classList.toggle("hide");
     const acct = acctById($("#vol-account").value);
     if (!acct) return;
     try {
       const r = await api(`/api/oc-info?account_id=${acct.id}`);
+      if (!valid()) return;
       if (r.ads[0]) $("#nv-ad").value = r.ads[0];
     } catch {}
   });
@@ -397,43 +435,52 @@
   };
 
   async function fillNetInstances() {
+    const valid = accountGuard('#net-account');
     const aid = $("#net-account").value;
     if (!aid) return;
     try {
       const r = await api(`/api/cloud/oci/instances?account_id=${aid}`);
+      if (!valid()) return;
       $("#net-instance").innerHTML = r.data.map(i =>
         `<option value="${i.id}">${esc(i.name)}（${esc(i.public_ip || i.state)}）</option>`).join("")
         || `<option value="">（没有实例）</option>`;
-    } catch (e) { $("#net-instance").innerHTML = `<option value="">加载失败</option>`; }
+    } catch (e) { if (valid()) $("#net-instance").innerHTML = `<option value="">加载失败</option>`; }
   }
-  $("#net-account").addEventListener("change", fillNetInstances);
+  $("#net-account").addEventListener("change", () => { fillNetInstances(); loadReserved(); });
 
   $("#btn-net-changeip").addEventListener("click", async () => {
+    const valid = accountGuard('#net-account');
+    if (!$('#net-instance').value) { toast('请先加载并选择当前账号的实例', false); return; }
+    if (!confirm('更换所选实例的临时公网 IP？SSH 连接会中断。')) return;
     try {
       const r = await api("/api/cloud/oci/change-ip", { method: "POST", body: {
         account_id: Number($("#net-account").value), instance_id: $("#net-instance").value }});
-      $("#net-result").textContent = `换IP：${r.old_ip || "无"} → ${r.new_ip || "分配中"}`;
+      if (valid()) $("#net-result").textContent = `换IP：${r.old_ip || "无"} → ${r.new_ip || "分配中"}`;
     } catch (e) { toast(e.message, false); }
   });
   $("#btn-net-ipv6").addEventListener("click", async () => {
+    const valid = accountGuard('#net-account');
+    if (!$('#net-instance').value) { toast('请先加载并选择当前账号的实例', false); return; }
     try {
       const r = await api("/api/oci/ipv6", { method: "POST", body: {
         account_id: Number($("#net-account").value), instance_id: $("#net-instance").value }});
-      $("#net-result").textContent = "IPv6: " + (r.ipv6 || "已附加");
+      if (valid()) $("#net-result").textContent = "IPv6: " + (r.ipv6 || "已附加");
     } catch (e) { toast(e.message, false); }
   });
 
   async function loadReserved() {
+    const valid = accountGuard('#net-account');
     const aid = $("#net-account").value;
     if (!aid) return;
     try {
       const r = await api(`/api/oci/reserved-ips?account_id=${aid}`);
+      if (!valid()) return;
       $("#rip-table tbody").innerHTML = r.data.map(p => `<tr>
         <td>${esc(p.ip)}</td><td>${esc(p.name)}</td><td>${p.assigned ? "✅" : "—"}</td>
         <td class="ops">${p.assigned ? "" : `<button data-ripa="${p.id}">绑定到实例</button>`}
           <button data-ripd="${p.id}" class="danger">删除</button></td></tr>`).join("")
         || `<tr><td colspan="4" class="muted">没有保留 IP</td></tr>`;
-    } catch (e) { $("#rip-table tbody").innerHTML = `<tr><td colspan="4" class="err-cell">${esc(e.message)}</td></tr>`; }
+    } catch (e) { if (valid()) $("#rip-table tbody").innerHTML = `<tr><td colspan="4" class="err-cell">${esc(e.message)}</td></tr>`; }
   }
   $("#btn-rip-load").addEventListener("click", loadReserved);
   $("#btn-rip-new").addEventListener("click", async () => {
@@ -516,10 +563,12 @@
   });
 
   async function loadUsers() {
+    const valid = accountGuard('#usr-account');
     const aid = $("#usr-account").value;
     if (!aid) return;
     try {
       const r = await api(`/api/oci/users?account_id=${aid}`);
+      if (!valid()) return;
       $("#usr-table tbody").innerHTML = r.data.map(u => `<tr>
         <td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${u.mfa ? "🔒 开启" : "—"}</td>
         <td class="ops">
@@ -537,6 +586,7 @@
     if (!btn) return;
     const aid = Number($("#usr-account").value);
     const uid = btn.dataset.id;
+    const valid = accountGuard('#usr-account');
     try {
       if (btn.dataset.uact === "resetpw") {
         if (!confirm(`重置 ${btn.dataset.name} 的控制台密码？`)) return;
@@ -547,6 +597,7 @@
         $("#uk-name").textContent = btn.dataset.name;
         $("#uk-name").dataset.uid = uid;
         const r = await api(`/api/oci/users/${uid}/keys?account_id=${aid}`);
+        if (!valid() || $('#uk-name').dataset.uid !== uid) return;
         $("#uk-table tbody").innerHTML = r.data.map(k => `<tr>
           <td>${esc(k.fingerprint)}</td><td>${esc(k.time_added)}</td>
           <td class="ops"><button data-ukdel="${esc(k.fingerprint)}">删除</button></td></tr>`).join("")
@@ -609,10 +660,12 @@
   });
 
   async function loadBuckets() {
+    const valid = accountGuard('#os-account');
     const aid = $("#os-account").value;
     if (!aid) return;
     try {
       const r = await api(`/api/oci/buckets?account_id=${aid}`);
+      if (!valid()) return;
       $("#os-buckets tbody").innerHTML = r.data.map(b => `<tr>
         <td>${esc(b.name)}</td><td>${esc(b.created)}</td>
         <td class="ops"><button data-bopen="${esc(b.name)}">打开</button>
@@ -636,10 +689,14 @@
 
   let curBucket = "";
   async function loadObjects(bucket, prefix) {
+    const valid = accountGuard('#os-account');
     curBucket = bucket || curBucket;
+    const requestedBucket = curBucket;
+    if (!requestedBucket) return;
     const aid = $("#os-account").value;
     try {
       const r = await api(`/api/oci/objects?account_id=${aid}&bucket=${encodeURIComponent(curBucket)}&prefix=${encodeURIComponent(prefix || "")}`);
+      if (!valid() || curBucket !== requestedBucket) return;
       $("#os-table tbody").innerHTML = (r.prefixes || []).map(p => `<tr>
         <td colspan="4"><a href="javascript:void(0)" data-oprefix="${esc(p)}">📁 ${esc(p)}</a></td></tr>`).join("")
         + r.objects.map(o => `<tr>
@@ -677,15 +734,19 @@
   $("#os-file").addEventListener("change", async () => {
     const f = $("#os-file").files[0];
     if (!f) return;
+    const valid = accountGuard('#os-account');
+    const aid = Number($('#os-account').value), bucket = curBucket, prefix = $('#os-objname').value.trim();
+    if (!bucket) { toast('请先打开当前账号的 Bucket', false); return; }
     const buf = await f.arrayBuffer();
+    if (!valid() || curBucket !== bucket) { toast('账号或 Bucket 已切换，上传已取消', false); return; }
     let binary = "";
     const bytes = new Uint8Array(buf);
     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    const name = ($("#os-objname").value.trim() || "") + f.name;
+    const name = prefix + f.name;
     try {
       await api("/api/oci/objects/put", { method: "POST", body: {
-        account_id: Number($("#os-account").value), bucket: curBucket, name, content_base64: btoa(binary) }});
-      toast("上传完成"); loadObjects(curBucket, $("#os-objname").value);
+        account_id: aid, bucket, name, content_base64: btoa(binary) }});
+      if (valid() && curBucket === bucket) { toast("上传完成"); loadObjects(bucket, prefix); }
     } catch (e) { toast(e.message, false); }
     $("#os-file").value = "";
   });

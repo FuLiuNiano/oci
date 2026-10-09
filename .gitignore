@@ -7,6 +7,7 @@ panel.pid
 .test-run-*/
 .selfcheck*/
 .browser-check*/
+.gcp-browser*/
 .pytest_cache/
 .env
 *.zip

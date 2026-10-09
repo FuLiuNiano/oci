@@ -446,11 +446,16 @@ def change_public_ip(acct, instance_id):
         net.delete_public_ip(existing.id)
         time.sleep(3)
 
-    created = net.create_public_ip(
-        oci.core.models.CreatePublicIpDetails(
-            compartment_id=comp, lifetime="EPHEMERAL", private_ip_id=private_ip_id,
-        )
-    ).data
+    try:
+        created = net.create_public_ip(
+            oci.core.models.CreatePublicIpDetails(
+                compartment_id=comp, lifetime="EPHEMERAL", private_ip_id=private_ip_id,
+            )
+        ).data
+    except Exception as error:
+        if existing is not None:
+            raise OciError("旧临时公网 IP 已删除，新 IP 申请未确认成功；请刷新检查，必要时在 OCI 控制台重新分配公网 IP。" + fmt_err(error)) from None
+        raise
     return {"old_ip": old_ip, "new_ip": (created.ip_address or "") if created else ""}
 
 
@@ -933,24 +938,35 @@ def delete_object(acct, bucket, name):
 # ---------- 云监控：流量统计（供超额关停任务使用） ----------
 
 def traffic_usage_gb(acct, hours=24):
-    """近 N 小时出站流量（GB），按实例归集。需要实例启用计算代理监控。"""
+    """VNIC 出站字节按实例归集；包含内网流量，不等同于公网计费流量。"""
     comp = compartment_of(acct)
     end = datetime.now(timezone.utc)
     start = end - timedelta(hours=hours)
     mon = _client(oci.monitoring.MonitoringClient, acct)
-    resp = mon.summarize_metrics_data(
-        compartment_id=comp,
-        summarize_metrics_data_details=oci.monitoring.models.SummarizeMetricsDataDetails(
-            namespace="oci_computeagent",
-            query="VnicToNetworkBytes[1h].sum()",
-            start_time=start, end_time=end,
-        ),
-    )
+    compute = _client(oci.core.ComputeClient, acct)
+    net = _client(oci.core.VirtualNetworkClient, acct)
+    groups = {}
+    for attachment in _all(compute.list_vnic_attachments, comp):
+        if attachment.lifecycle_state != "ATTACHED" or not attachment.vnic_id:
+            continue
+        vnic = net.get_vnic(attachment.vnic_id).data
+        # VNIC metrics live in the subnet's compartment, which may differ from the VM's.
+        groups.setdefault(vnic.compartment_id or comp, {})[vnic.id] = attachment.instance_id
     per = {}
     total = 0.0
-    for md in resp.data:
-        gb = sum(p.value or 0 for p in md.aggregated_datapoints or []) / 1e9
-        rid = (md.dimensions or {}).get("resourceId", "")
-        per[rid] = per.get(rid, 0) + gb
-        total += gb
+    for network_compartment, instances in groups.items():
+        resp = mon.summarize_metrics_data(
+            compartment_id=network_compartment,
+            summarize_metrics_data_details=oci.monitoring.models.SummarizeMetricsDataDetails(
+                namespace="oci_vcn", query="VnicToNetworkBytes[1h].sum()",
+                start_time=start, end_time=end, resolution="1h",
+            ),
+        )
+        for md in resp.data:
+            rid = instances.get((md.dimensions or {}).get("resourceId", ""))
+            if not rid or not md.aggregated_datapoints:
+                continue
+            gb = sum(p.value or 0 for p in md.aggregated_datapoints) / 1e9
+            per[rid] = per.get(rid, 0) + gb
+            total += gb
     return {"total_gb": round(total, 2), "per_resource": per}

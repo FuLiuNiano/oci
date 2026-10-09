@@ -1,0 +1,14 @@
+#view-gcp .bar { flex-wrap:wrap; gap:10px; }
+#view-gcp #gcp-account { min-width:220px; max-width:100%; }
+#view-gcp textarea { width:100%; box-sizing:border-box; }
+#view-gcp input[type=checkbox] { width:auto; }
+#view-gcp label:has(input[type=checkbox]) { display:block; margin:10px 0; }
+#view-gcp .gcp-summary { display:flex; flex-wrap:wrap; gap:18px; }
+#view-gcp .gcp-instances { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr)); gap:16px; }
+#view-gcp .gcp-instance h3 { margin-top:0; overflow-wrap:anywhere; }
+#view-gcp .gcp-instance dl { display:grid; grid-template-columns:90px 1fr; gap:8px; }
+#view-gcp .gcp-instance dd { margin:0; overflow-wrap:anywhere; }
+#view-gcp .gcp-table-wrap { max-height:420px; overflow:auto; overscroll-behavior:contain; }
+#view-gcp #gcp-message { white-space:pre-wrap; overflow-wrap:anywhere; }
+#view-gcp .gcp-instance button { font-size:13px; padding:7px 10px; }
+#view-gcp #gcp-route { overflow-wrap:anywhere; }

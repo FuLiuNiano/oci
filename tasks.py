@@ -203,12 +203,17 @@ def _tick_traffic():
         limit = acct["traffic_limit_gb"]
         if total < limit:
             continue
-        names = {i["id"]: i["name"] for i in oci_service.list_instances(acct)}
+        try:
+            instances = oci_service.list_instances(acct)
+        except Exception as e:
+            print(f"[traffic] 账号 {acct['name']} 实例查询失败: {e}")
+            continue
+        names = {i["id"]: i["name"] for i in instances}
         detail = "\n".join(f"{names.get(k, k[-12:])}: {round(v, 2)}GB"
                            for k, v in usage.get("per_resource", {}).items())
         notify.send("流量超额告警", f"账号 {acct['name']} 近24h出站 {total}GB / 阈值 {limit}GB\n{detail}")
         if acct.get("traffic_action") == "stop":
-            for ins in oci_service.list_instances(acct):
+            for ins in instances:
                 if ins["state"] == "RUNNING":
                     blocked = store.get_json_setting(f"traffic_block:{acct['id']}", []) or []
                     if ins["id"] not in blocked:

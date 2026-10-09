@@ -164,13 +164,18 @@ def test_objects_pagination(sdk, account):
 
 def test_monitoring_sdk_and_values(sdk, account):
     data, calls = sdk
-    data["summarize_metrics_data"] = [oci.monitoring.models.MetricData(dimensions={"resourceId":"instance1"},
+    data["list_vnic_attachments"] = [oci.core.models.VnicAttachment(vnic_id="vnic1", instance_id="instance1", lifecycle_state="ATTACHED")]
+    data["get_vnic"] = oci.core.models.Vnic(id="vnic1", compartment_id="network-comp")
+    data["summarize_metrics_data"] = [oci.monitoring.models.MetricData(dimensions={"resourceId":"vnic1"},
         aggregated_datapoints=[oci.monitoring.models.AggregatedDatapoint(value=1e9),
                                oci.monitoring.models.AggregatedDatapoint(value=2e9)])]
     assert service.traffic_usage_gb(account)["total_gb"] == 3
     details = calls[-1][2]["body"]
     assert details.start_time and details.end_time
     assert details.query == "VnicToNetworkBytes[1h].sum()"
+    assert details.namespace == "oci_vcn" and details.resolution == "1h"
+    assert calls[-1][2]["query_params"]["compartmentId"] == "network-comp"
+    assert service.traffic_usage_gb(account)["per_resource"] == {"instance1":3}
 
 
 def test_limits_use_resource_availability(sdk, account):
