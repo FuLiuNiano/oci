@@ -1,6 +1,24 @@
 # OCI Panel 2.2
 
-管理 Oracle Cloud 与 Google Cloud 的自托管面板。管理员在自己的服务器登录，云 API 私钥保存在本地数据库，不需要 Telegram、第三方账号激活或购买面板权限。
+管理 Oracle Cloud、Google Cloud 与 AWS Lightsail 的自托管面板。管理员在自己的服务器登录，云 API 凭据保存在本地数据库，不需要 Telegram、第三方账号激活或购买面板权限。
+
+## AWS Lightsail 管理
+
+「AWS Lightsail」管理轻量服务器，支持账号/区域、实例列表、创建、启动、停止、重启、删除、CPU 和网卡流量、实例快照、静态 IPv4 申请/绑定/解绑/释放，以及同步到 SSH。这里不管理 EC2。Linux/Unix 的系统与应用镜像、套餐和参考 USD 月价从当前账号区域读取；支持 IPv4+IPv6 或仅 IPv6 套餐。实际费用、可用容量和配额以 AWS 为准，不保证免费。
+
+使用具备相应 Lightsail 权限的 IAM Access Key ID 和 Secret Access Key，在面板添加名称、区域和可选 API 代理。临时凭据还必须填写对应 Session Token，过期后需要重新保存。使用 IAM 凭据，不需要提供 AWS 控制台登录密码。首次使用请先在 Lightsail 控制台完成账号开通；区域初始化或 IAM 限制会阻止 API 操作。「测试凭据」调用 STS 核对 AWS 身份；通过身份测试不代表已经拥有 Lightsail 操作权限。
+
+账号使用独立 `aws_accounts` 表，不修改已有 OCI/GCP 配置。每个账号创建自己的签名凭据和 HTTP 连接池，支持 HTTP/HTTPS/SOCKS5 代理；SOCKS5 通过代理解析目标域名。不使用环境变量代理、`~/.aws` 默认凭据/配置、AWS_PROFILE 或云主机元数据凭据。代理无效/失败禁止回退直连，重定向被阻止，页面只显示配置线路，不代表已检测实际出口。访问密钥只保存在本地数据库，页面仅显示末四位；编辑留空保留凭据和代理，移除代理必须明确勾选。
+
+创建使用当前区域已有的 Lightsail SSH 密钥对（与 EC2 密钥对不同）；默认密钥对的私钥在 [Lightsail 控制台](https://lightsail.aws.amazon.com/) 下载。不会额外开放防火墙端口；网站需要的入站端口请在 Lightsail 控制台配置。快照恢复、套餐升级和防火墙编辑目前也在 AWS 控制台操作。**删除实例会删除系统盘，不能撤销**；请先创建实例快照并确认状态为 `available`，再输入实例名称确认删除。快照和未绑定的静态 IP 可能持续收费。
+
+CPU 和流量来自 [GetInstanceMetricData](https://docs.aws.amazon.com/lightsail/2016-11-28/api-reference/API_GetInstanceMetricData.html)，CPU 使用平均值，收发流量使用字节总和；近 7 天按小时、更长区间按天聚合，支持请求 1–90 天。返回范围取决于 AWS 保留的数据，空白不等于实际零流量；网卡流量不等于计费流量。实时内存、磁盘和网速继续通过现有 SSH 监控读取。
+
+SSH 同步按面板 AWS 账号 ID、实际 AWS 账号 ID、区域和实例 ARN 关联，**不按 IP 合并**。新会话可单独配置 SOCKS5 代理，留空直连；SSH 代理不会自动继承云 API 代理。用户名留空使用镜像默认用户，优先使用公网 IPv4，再使用公网 IPv6；面板需具备对应网络连通性。同步后请在 SSH 页面填写私钥。已有 SSH 会话保留私钥、代理及主机地址，IP 变更需手动编辑。终端、SFTP、实时监控和转发使用同一会话的配置，不串用其他账号线路。
+
+IAM 需按启用功能授权 `lightsail:GetInstances/GetInstance/GetRegions/GetBlueprints/GetBundles/GetKeyPairs/GetOperation/GetInstanceMetricData/GetInstanceSnapshots/GetStaticIps/GetStaticIp`，以及所需的 `CreateInstances/StartInstance/StopInstance/RebootInstance/DeleteInstance/CreateInstanceSnapshot/DeleteInstanceSnapshot/AllocateStaticIp/AttachStaticIp/DetachStaticIp/ReleaseStaticIp`（各项均以 `lightsail:` 为前缀）。权限不足会显示 AWS 错误代码；不自动更换凭据或线路重试。没有添加新的后台自动创建/删除任务。
+
+移除 AWS 配置只删除本地账号和关联记录，保留云端资源与已有 SSH 会话。现有更新脚本会备份整个数据目录，包括新增 AWS 表；不要把 `data/`、AWS 密钥或备份上传 Git。开发验证：`python -m pytest tests/test_aws.py -q` 与 `python tests/browser_aws.py`；使用合成凭据、官方 SDK 模型和本地真实 TLS/SOCKS，不创建真实 AWS 资源。
 
 ## GCP 管理
 

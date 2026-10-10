@@ -8,6 +8,7 @@ panel.pid
 .selfcheck*/
 .browser-check*/
 .gcp-browser*/
+.aws-browser*/
 .pytest_cache/
 .env
 *.zip

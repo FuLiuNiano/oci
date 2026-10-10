@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="static/manga-layout.css">
 <link rel="stylesheet" href="static/manga.css">
 <link rel="stylesheet" href="static/gcp.css">
+<link rel="stylesheet" href="static/aws.css">
 </head>
 <body>
 <header>
@@ -53,6 +54,7 @@
   <button data-view="mail">邮件服务</button>
   <button data-view="accounts">云账号</button>
   <button data-view="gcp">GCP 管理</button>
+  <button data-view="aws">AWS Lightsail</button>
   <button data-view="settings">设置</button>
 </nav>
 <!-- 概览 -->
@@ -446,6 +448,32 @@
   <div id="gcp-instances" class="gcp-instances"></div>
   <div id="gcp-traffic-panel" class="card hide"><h3>近 90 天实例网卡流量</h3><p id="gcp-traffic-summary"></p><p class="muted">来自 Cloud Monitoring 的网卡收发字节，不等同于计费流量。没有监控数据时显示空记录。</p><div class="gcp-table-wrap"><table><thead><tr><th>日期（UTC）</th><th>实例 ID</th><th>接收</th><th>发送</th></tr></thead><tbody id="gcp-traffic-rows"></tbody></table></div></div>
 </section>
+<section id="view-aws" class="view hide">
+  <div class="page-heading"><div><span class="eyebrow">AMAZON WEB SERVICES / LIGHTSAIL</span><h1>AWS 轻量服务器</h1><p>按账号、区域和连接线路管理 Lightsail。</p></div><button id="aws-new">添加 AWS 账号</button></div>
+  <div class="card"><div class="bar"><label for="aws-account">AWS 账号</label><select id="aws-account"><option value="">请添加账号</option></select><span id="aws-route" class="muted"></span><button id="aws-edit" class="ghost">编辑</button><button id="aws-remove" class="ghost">移除账号</button></div><p id="aws-identity" class="muted"></p></div>
+  <form id="aws-account-form" class="card hide" autocomplete="off"><h3 id="aws-form-title">添加 AWS 账号</h3><div class="form-grid">
+    <div><label for="aws-name">账号名称</label><input id="aws-name" required maxlength="100"></div>
+    <div><label for="aws-region">Lightsail 区域</label><select id="aws-region" required></select></div>
+    <div><label for="aws-access">Access Key ID（编辑留空保留）</label><input id="aws-access" maxlength="128" spellcheck="false"></div>
+    <div><label for="aws-secret">Secret Access Key（编辑留空保留）</label><input id="aws-secret" type="password" maxlength="128" autocomplete="new-password"></div>
+    <div><label for="aws-token">Session Token（临时凭据必填）</label><textarea id="aws-token" rows="2" spellcheck="false"></textarea><label><input id="aws-clear-token" type="checkbox"> 清除已保存的临时令牌</label></div>
+    <div><label for="aws-proxy">AWS API 代理（可选，失败禁止直连）</label><input id="aws-proxy" placeholder="socks5h://地址:1080 或 http://地址:端口"><label><input id="aws-direct" type="checkbox"> 编辑时移除原代理，改为直连</label></div>
+  </div><p class="muted">使用具备 Lightsail 权限的 IAM 凭据。密钥保存在服务器本地，不回传；编辑时留空保留。每个区域可单独保存一个配置。</p><div class="bar"><button type="submit">保存账号</button><button type="button" id="aws-cancel-account" class="ghost">取消</button></div></form>
+  <div class="card"><div class="bar"><button id="aws-test" class="ghost">测试凭据</button><button id="aws-refresh">刷新实例</button><button id="aws-open-create">创建轻量服务器</button><button id="aws-open-sync">同步到 SSH</button><button id="aws-open-snapshots" class="ghost">实例快照</button><button id="aws-open-ips" class="ghost">静态 IP</button></div><p id="aws-message" role="status">请添加或选择 AWS 账号。</p><div id="aws-summary" class="aws-summary"></div></div>
+  <form id="aws-create-form" class="card hide"><h3>创建 Lightsail 实例</h3><div class="form-grid">
+    <div><label for="aws-vm-name">实例名称</label><input id="aws-vm-name" value="lightsail-vm" required pattern="[A-Za-z0-9_][A-Za-z0-9_-]{0,98}[A-Za-z0-9_]" maxlength="100"></div>
+    <div><label for="aws-zone">可用区</label><select id="aws-zone" required></select></div>
+    <div><label for="aws-blueprint">Linux 系统 / 应用镜像</label><select id="aws-blueprint" required></select></div>
+    <div><label for="aws-ip-type">公网地址类型</label><select id="aws-ip-type"><option value="dualstack">IPv4 + IPv6</option><option value="ipv6">仅 IPv6</option></select></div>
+    <div><label for="aws-bundle">套餐（参考月价 USD）</label><select id="aws-bundle" required></select></div>
+    <div><label for="aws-key-pair">当前区域 SSH 密钥对</label><select id="aws-key-pair" required></select></div>
+  </div><p class="muted">创建资源会产生费用，以 AWS 实际账单为准。使用当前区域已有密钥对；默认密钥的私钥请在 Lightsail 控制台下载。此页不会额外开放防火墙端口。</p><div class="bar"><button type="submit">确认创建</button><button type="button" id="aws-cancel-create" class="ghost">取消</button></div></form>
+  <form id="aws-sync-form" class="card hide"><h3>同步 Lightsail 到 SSH</h3><div class="form-grid"><div><label for="aws-sync-user">SSH 用户名（留空使用镜像默认用户）</label><input id="aws-sync-user" placeholder="ubuntu / bitnami / ec2-user"></div><div><label for="aws-sync-proxy">新 SSH 会话代理（留空直连）</label><input id="aws-sync-proxy" placeholder="socks5h://地址:端口"></div></div><label><input id="aws-sync-private" type="checkbox"> 无公网地址时允许使用内网 IP</label><p class="muted">AWS API 与 SSH 线路分别设置。已有会话的认证和代理会保留；IP 改变需手动编辑。新会话请填写对应私钥，终端、SFTP 和实时监控沿用该会话线路。</p><div class="bar"><button type="submit">确认同步</button><button type="button" id="aws-cancel-sync" class="ghost">取消</button></div></form>
+  <div id="aws-instances" class="aws-instances"></div>
+  <div id="aws-metrics-panel" class="card hide"><div class="bar"><h3 id="aws-metrics-title">云端 CPU 与流量</h3><select id="aws-metrics-days"><option value="1">近 1 天</option><option value="7" selected>近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option></select><button id="aws-metrics-refresh" class="ghost">刷新</button></div><p id="aws-metrics-summary"></p><p class="muted">Lightsail 网卡收发字节包含非计费流量，不代表费用；空白表示暂无数据。近 7 天按小时、更长时间按天聚合。实时系统监控请连接 SSH。</p><div class="aws-table-wrap"><table><thead><tr><th>时间（UTC）</th><th>平均 CPU</th><th>接收</th><th>发送</th></tr></thead><tbody id="aws-metrics-rows"></tbody></table></div></div>
+  <div id="aws-snapshots-panel" class="card hide"><div class="bar"><h3>实例快照</h3><button id="aws-snapshots-refresh" class="ghost">刷新</button></div><p class="muted">快照会产生存储费用。删除实例会删除系统盘，请先创建快照并确认可用。已创建快照保留在 AWS。</p><div class="aws-table-wrap"><table><thead><tr><th>名称</th><th>来源实例</th><th>状态</th><th>大小</th><th>操作</th></tr></thead><tbody id="aws-snapshot-rows"></tbody></table></div></div>
+  <div id="aws-ips-panel" class="card hide"><div class="bar"><h3>静态公网 IPv4</h3><button id="aws-ips-refresh" class="ghost">刷新</button><button id="aws-allocate-ip">申请静态 IP</button></div><p class="muted">绑定 / 解绑会改变公网地址并可能中断 SSH。未绑定的静态 IP 可能收费；已绑定其他实例时不会自动抢占。</p><div class="aws-table-wrap"><table><thead><tr><th>名称</th><th>IPv4</th><th>绑定实例</th><th>操作</th></tr></thead><tbody id="aws-ip-rows"></tbody></table></div></div>
+</section>
 </main>
 
 <div id="toast" class="toast"></div>
@@ -456,6 +484,7 @@
 <script src="static/webssh.js"></script>
 <script src="static/dashboard.js"></script>
 <script src="static/gcp.js"></script>
+<script src="static/aws.js"></script>
 
 </body>
 </html>

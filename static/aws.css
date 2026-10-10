@@ -1,0 +1,15 @@
+#view-aws .bar { flex-wrap:wrap; gap:10px; }
+#view-aws #aws-account { min-width:220px; max-width:100%; }
+#view-aws textarea { width:100%; box-sizing:border-box; }
+#view-aws input[type=checkbox] { width:auto; }
+#view-aws label:has(input[type=checkbox]) { display:block; margin:10px 0; }
+#view-aws .aws-summary { display:flex; flex-wrap:wrap; gap:18px; }
+#view-aws .aws-instances { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr)); gap:16px; }
+#view-aws .aws-instance h3 { margin-top:0; overflow-wrap:anywhere; }
+#view-aws .aws-instance dl { display:grid; grid-template-columns:90px 1fr; gap:8px; }
+#view-aws .aws-instance dd { margin:0; overflow-wrap:anywhere; }
+#view-aws .aws-table-wrap { max-height:420px; overflow:auto; overscroll-behavior:contain; }
+#view-aws #aws-message { white-space:pre-wrap; overflow-wrap:anywhere; }
+#view-aws .aws-instance button, #view-aws table button { font-size:13px; padding:7px 10px; }
+#view-aws #aws-route, #view-aws #aws-identity { overflow-wrap:anywhere; }
+#view-aws .form-grid select { max-width:100%; }
