@@ -315,7 +315,13 @@ def oci_assign_reserved_ip(public_ip_id: str, body: dict, _: None = Depends(requ
 @api.post("/oci/ipv6")
 def oci_ipv6(body: dict, _: None = Depends(require_auth)):
     acct = _account_or_404(body["account_id"])
-    return _wrap(oci_service.attach_ipv6, acct, body["instance_id"])
+    try:
+        return oci_service.attach_ipv6(acct, body["instance_id"])
+    except oci_service.OciError as e:
+        # A handled network prerequisite/permission error is not a broken gateway.
+        raise HTTPException(400, str(e)) from None
+    except Exception as e:
+        raise HTTPException(502, oci_service.fmt_err(e)) from None
 
 
 # ---- 硬盘 ----

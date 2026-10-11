@@ -1,5 +1,8 @@
 """OCI API 封装：实例/网络/硬盘/用户/配额/对象存储/串口/监控，全部走官方 oci SDK，密钥只在本地。"""
 import time
+import hashlib
+import ipaddress
+import threading
 from datetime import datetime, timedelta, timezone
 
 import oci
@@ -459,16 +462,95 @@ def change_public_ip(acct, instance_id):
     return {"old_ip": old_ip, "new_ip": (created.ip_address or "") if created else ""}
 
 
+_ipv6_locks = {}
+_ipv6_locks_guard = threading.Lock()
+
+
+def _ipv6_prefixes(resource):
+    prefixes = list(getattr(resource, "ipv6_cidr_blocks", None) or [])
+    single = getattr(resource, "ipv6_cidr_block", None)
+    if single and single not in prefixes:
+        prefixes.append(single)
+    return prefixes
+
+
+def _wait_ipv6_network(net, getter, resource_id):
+    return oci.wait_until(
+        net, getter(resource_id),
+        evaluate_response=lambda response: (
+            response.data.lifecycle_state == "AVAILABLE"
+            and bool(_ipv6_prefixes(response.data))),
+        fetch_func=lambda **_: getter(resource_id),
+        max_wait_seconds=30, max_interval_seconds=2).data
+
+
+def _ipv6_subnet_prefix(net, vcn, subnet):
+    # Include both compartments when the subnet and its VCN are stored separately.
+    used = []
+    for comp in {vcn.compartment_id, subnet.compartment_id} - {None}:
+        for other in _all(net.list_subnets, comp, vcn_id=vcn.id):
+            used.extend(ipaddress.IPv6Network(p) for p in _ipv6_prefixes(other))
+    for prefix in _ipv6_prefixes(vcn):
+        block = ipaddress.IPv6Network(prefix)
+        if block.prefixlen > 64:
+            continue
+        for candidate in block.subnets(new_prefix=64):
+            if not any(candidate.overlaps(existing) for existing in used):
+                return str(candidate)
+    raise OciError("VCN 没有可用的 IPv6 /64 子网段，请检查其他子网的地址分配")
+
+
 def attach_ipv6(acct, instance_id):
+    """Enable missing network prefixes and reuse an existing VNIC address on retry."""
     net = _client(oci.core.VirtualNetworkClient, acct)
-    vnic = _primary_vnic(net, compartment_of(acct), instance_id, _client(oci.core.ComputeClient, acct))
-    try:
-        ip6 = net.create_ipv6(oci.core.models.CreateIpv6Details(vnic_id=vnic.id)).data
-    except ServiceError as e:
-        if e.status in (400, 404, 409):
-            raise OciError(f"附加 IPv6 失败（需先在控制台给 VCN/子网启用 IPv6）: {e.message}")
-        raise
-    return {"ipv6": ip6.ip_address or ""}
+    compute = _client(oci.core.ComputeClient, acct)
+    vnic = _primary_vnic(net, compartment_of(acct), instance_id, compute)
+    subnet = net.get_subnet(vnic.subnet_id).data
+    key = (build_config(acct)["tenancy"], acct.get("region"), subnet.vcn_id)
+    with _ipv6_locks_guard:
+        lock = _ipv6_locks.setdefault(key, threading.Lock())
+    token = lambda resource: hashlib.sha256(
+        ("oci-panel-ipv6:" + repr(key) + ":" + resource).encode()).hexdigest()
+    stage = "检查 IPv6 配置"
+    changed = []
+    with lock:
+        try:
+            existing = _all(net.list_ipv6s, vnic_id=vnic.id)
+            if existing:
+                return {"ipv6": existing[0].ip_address or "", "reused": True,
+                        "message": "该网卡已有 IPv6，已返回现有地址"}
+            subnet_response = net.get_subnet(vnic.subnet_id)
+            subnet = subnet_response.data
+            if not _ipv6_prefixes(subnet):
+                stage = "开启 VCN IPv6"
+                vcn_response = net.get_vcn(subnet.vcn_id)
+                vcn = vcn_response.data
+                if not _ipv6_prefixes(vcn):
+                    net.add_ipv6_vcn_cidr(
+                        vcn.id, opc_retry_token=token(vcn.id),
+                        if_match=vcn_response.headers.get("etag"),
+                        add_vcn_ipv6_cidr_details=oci.core.models.AddVcnIpv6CidrDetails(
+                            is_oracle_gua_allocation_enabled=True))
+                    changed.append("VCN IPv6")
+                    vcn = _wait_ipv6_network(net, net.get_vcn, vcn.id)
+                stage = "开启子网 IPv6"
+                prefix = _ipv6_subnet_prefix(net, vcn, subnet)
+                net.add_ipv6_subnet_cidr(
+                    subnet.id, oci.core.models.AddSubnetIpv6CidrDetails(ipv6_cidr_block=prefix),
+                    opc_retry_token=token(subnet.id + ":" + prefix),
+                    if_match=subnet_response.headers.get("etag"))
+                changed.append("子网 IPv6")
+                subnet = _wait_ipv6_network(net, net.get_subnet, subnet.id)
+            stage = "给网卡分配 IPv6"
+            ip6 = net.create_ipv6(
+                oci.core.models.CreateIpv6Details(
+                    vnic_id=vnic.id, ipv6_subnet_cidr=_ipv6_prefixes(subnet)[0]),
+                opc_retry_token=token(vnic.id)).data
+            return {"ipv6": ip6.ip_address or "", "reused": False,
+                    "message": "IPv6 已分配；公网连通还需路由、安全规则和系统网络配置"}
+        except (ServiceError, OciError, OciTransportError, oci.exceptions.MaximumWaitTimeExceeded) as e:
+            partial = ("；已提交的 " + "、".join(changed) + " 会保留，可再次点击继续") if changed else ""
+            raise OciError(f"{stage}失败：{fmt_err(e)}{partial}") from None
 
 
 def list_reserved_ips(acct):

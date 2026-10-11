@@ -111,7 +111,7 @@
         <div class="instance-ip-actions hide">
           ${op("ip", "换临时 IP", !i.public_ip)}
           ${op("reserved-ip", "保留 IP 管理")}
-          ${op("ipv6", "附加 IPv6")}
+          ${op("ipv6", "一键添加 IPv6")}
         </div>
       </article>`;
     }).join("") || `<div class="empty-state card">该账号下没有实例</div>`;
@@ -197,8 +197,17 @@
         toast(r.message);
         loadInstances(true);
       } else if (act === "ipv6") {
-        const r = await api("/api/oci/ipv6", { method: "POST", body: { account_id: acct.id, instance_id: id } });
-        toast("IPv6 已附加: " + (r.ipv6 || "(刷新查看)")); loadInstances(true);
+        const valid = accountGuard('#inst-account');
+        btn.disabled = true;
+        btn.textContent = "正在添加…";
+        toast("正在检查并开启网络 IPv6，请稍候…");
+        try {
+          const r = await api("/api/oci/ipv6", { method: "POST", body: { account_id: acct.id, instance_id: id } });
+          if (valid()) {
+            toast(`${r.ipv6 || "已分配"}；${r.message || "IPv6 已附加"}`); loadInstances(true);
+          }
+        } catch (err) { if (valid()) toast(err.message, false); }
+        finally { btn.disabled = false; btn.textContent = "一键添加 IPv6"; }
       } else if (act === "console") {
         toast("抓取串口日志中（最多45秒）…");
         const r = await api("/api/oci/console", { method: "POST", body: { account_id: acct.id, instance_id: id } });
@@ -461,11 +470,17 @@
   $("#btn-net-ipv6").addEventListener("click", async () => {
     const valid = accountGuard('#net-account');
     if (!$('#net-instance').value) { toast('请先加载并选择当前账号的实例', false); return; }
+    const btn = $("#btn-net-ipv6");
+    btn.disabled = true;
+    btn.textContent = "正在添加…";
+    $("#net-result").textContent = "正在检查并开启 VCN、子网 IPv6，请稍候…";
     try {
       const r = await api("/api/oci/ipv6", { method: "POST", body: {
         account_id: Number($("#net-account").value), instance_id: $("#net-instance").value }});
-      if (valid()) $("#net-result").textContent = "IPv6: " + (r.ipv6 || "已附加");
-    } catch (e) { toast(e.message, false); }
+      if (valid()) $("#net-result").textContent = `IPv6: ${r.ipv6 || "已附加"}；${r.message || ""}`;
+    } catch (e) {
+      if (valid()) { $("#net-result").textContent = e.message; toast(e.message, false); }
+    } finally { btn.disabled = false; btn.textContent = "一键添加 IPv6"; }
   });
 
   async function loadReserved() {

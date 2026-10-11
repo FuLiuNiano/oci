@@ -175,9 +175,11 @@
     </div>
     <div class="bar" style="margin-top:10px">
       <button id="btn-net-changeip">一键换公网IP</button>
-      <button id="btn-net-ipv6">附加 IPv6</button>
+      <button id="btn-net-ipv6">一键添加 IPv6</button>
       <span id="net-result" class="muted"></span>
-    </div></div>
+    </div>
+    <p class="muted">添加 IPv6 会自动开启实例所属 VCN 和子网的 IPv6，已有地址会复用。同一网络的其他实例也会看到新增前缀；公网连通仍需配置路由、安全规则和系统网络。</p>
+  </div>
   <div class="card"><h3 class="sec" style="margin-top:0">OCI 保留 IP</h3>
     <div class="bar"><button id="btn-rip-load">加载保留IP</button><button id="btn-rip-new" class="ghost">新建保留IP</button></div>
     <div class="table-wrap"><table id="rip-table">
