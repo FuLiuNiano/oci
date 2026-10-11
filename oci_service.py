@@ -561,6 +561,81 @@ def attach_ipv6(acct, instance_id):
             raise OciError(f"{stage}失败：{fmt_err(e)}{partial}") from None
 
 
+def replace_ipv6(acct, instance_id, old_address):
+    """Replace exactly one address on the selected account's primary VNIC."""
+    try:
+        old_address = str(ipaddress.IPv6Address(old_address))
+    except ValueError:
+        raise OciError("请选择有效的旧 IPv6 地址") from None
+    net = _client(oci.core.VirtualNetworkClient, acct)
+    vnic = _primary_vnic(net, compartment_of(acct), instance_id,
+                         _client(oci.core.ComputeClient, acct))
+    subnet = net.get_subnet(vnic.subnet_id).data
+    key = (build_config(acct)["tenancy"], acct.get("region"), subnet.vcn_id)
+    with _ipv6_locks_guard:
+        lock = _ipv6_locks.setdefault(key, threading.Lock())
+    with lock:
+        existing = _all(net.list_ipv6s, vnic_id=vnic.id)
+        old = next((ip for ip in existing if ip.ip_address and
+                    str(ipaddress.IPv6Address(ip.ip_address)) == old_address), None)
+        if old is None:
+            raise OciError("所选旧 IPv6 已变化或不属于当前实例，请刷新后重试")
+        # A saved SSH host must not be left pointing at an address we remove.
+        for session in store.query("SELECT host FROM ssh_sessions"):
+            try:
+                if str(ipaddress.IPv6Address(session["host"])) == old_address:
+                    raise OciError("旧 IPv6 正被保存的 SSH 会话使用，请先改用 IPv4 或其他地址再更换")
+            except ValueError:
+                pass
+        response = net.get_ipv6(old.id)
+        old = response.data
+        if old.vnic_id != vnic.id or old.ip_address != old_address:
+            raise OciError("旧 IPv6 的网卡或地址已变化，已停止更换")
+        etag = response.headers.get("etag")
+        if not etag:
+            raise OciError("无法取得旧 IPv6 的版本信息，已停止更换")
+        prefix = next((p for p in _ipv6_prefixes(subnet)
+                       if ipaddress.IPv6Address(old_address) in ipaddress.IPv6Network(p)), None)
+        if not prefix:
+            raise OciError("旧 IPv6 不属于当前子网的地址段，已停止更换")
+        stage = "申请新 IPv6"
+        new = None
+        try:
+            token = hashlib.sha256(("oci-panel-replace-ipv6:" + repr(key) + ":" + old.id).encode()).hexdigest()
+            new = net.create_ipv6(oci.core.models.CreateIpv6Details(
+                vnic_id=vnic.id, ipv6_subnet_cidr=prefix,
+                route_table_id=old.route_table_id), opc_retry_token=token).data
+            if (new.vnic_id != vnic.id or not new.ip_address or
+                    ipaddress.IPv6Address(new.ip_address) not in ipaddress.IPv6Network(prefix) or
+                    any(ip.ip_address == new.ip_address for ip in existing)):
+                new = None
+                raise OciError("新地址确认异常，旧 IPv6 已保留")
+            stage = "确认新 IPv6"
+            new = oci.wait_until(net, net.get_ipv6(new.id),
+                evaluate_response=lambda r: r.data.lifecycle_state == "AVAILABLE",
+                fetch_func=lambda **_: net.get_ipv6(new.id),
+                max_wait_seconds=30, max_interval_seconds=2).data
+            if (new.vnic_id != vnic.id or not new.ip_address or
+                    ipaddress.IPv6Address(new.ip_address) not in ipaddress.IPv6Network(prefix) or
+                    any(ip.ip_address == new.ip_address for ip in existing)):
+                new = None
+                raise OciError("新地址确认异常，旧 IPv6 已保留")
+            stage = "删除旧 IPv6"
+            net.delete_ipv6(old.id, if_match=etag)
+        except (ServiceError, OciError, OciTransportError, oci.exceptions.MaximumWaitTimeExceeded) as e:
+            if new and new.ip_address:
+                # Keep both on an uncertain result; never delete another address as rollback.
+                addresses = list(dict.fromkeys([ip.ip_address for ip in existing if ip.ip_address] + [new.ip_address]))
+                return _ipv6_reply(vnic, addresses,
+                    f"{stage}失败：{fmt_err(e)}；请刷新核实，未继续删除地址", replaced=False,
+                    old_ip=old_address, new_ip=new.ip_address)
+            raise OciError(f"{stage}失败：{fmt_err(e)}；未删除旧 IPv6，请刷新核实") from None
+        return _ipv6_reply(vnic, [new.ip_address] + [ip.ip_address for ip in existing
+                           if ip.id != old.id and ip.ip_address],
+            "IPv6 已更换；系统可能需要重新获取地址，3x-ui 或域名绑定请更新后验证连通",
+            replaced=True, old_ip=old_address, new_ip=new.ip_address)
+
+
 def _ipv6_rule_covers(rule, desired, ingress):
     field = "source" if ingress else "destination"
     if rule.is_stateless or getattr(rule, field + "_type", None) not in (None, "CIDR_BLOCK"):

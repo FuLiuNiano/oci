@@ -20,7 +20,10 @@
   function invalidateAccountView(selector) {
     accountEpochs.set(selector, (accountEpochs.get(selector) || 0) + 1);
     ownedViews[selector].forEach(s => $(s).replaceChildren());
-    if (selector === '#net-account') $('#net-ipv6-public-form').classList.add('hide');
+    if (selector === '#net-account') {
+      $('#net-ipv6-public-form').classList.add('hide');
+      $('#net-ipv6-replace-form').classList.add('hide');
+    }
     if (selector === '#l-account') $('#l-bootvol').value = '';
     if (selector === '#vol-account') { $('#newvol-form').classList.add('hide'); $('#nv-ad').value = ''; }
     if (selector === '#usr-account') {
@@ -488,8 +491,50 @@
     } finally { btn.disabled = false; btn.textContent = "一键添加 IPv6"; }
   });
 
+  let ipv6ReplaceTarget;
+  $('#btn-net-ipv6-replace').addEventListener('click', async () => {
+    const instanceId = $('#net-instance').value, accountId = Number($('#net-account').value);
+    if (!instanceId || !accountId) { toast('请先选择账号和实例', false); return; }
+    const accountValid = accountGuard('#net-account');
+    const target = {account_id:accountId, instance_id:instanceId,
+      valid:() => accountValid() && $('#net-instance').value === instanceId};
+    ipv6ReplaceTarget = target;
+    const btn = $('#btn-net-ipv6-replace'); btn.disabled=true;
+    $('#net-ipv6-replace-form').classList.add('hide');
+    try {
+      const r = await api(`/api/cloud/oci/instances?account_id=${accountId}`);
+      if (!target.valid() || ipv6ReplaceTarget !== target) return;
+      const addresses = r.data.find(i => i.id === instanceId)?.ipv6_addresses || [];
+      if (!addresses.length) { toast('当前实例没有 IPv6，请先添加', false); return; }
+      $('#net-ipv6-old').innerHTML=addresses.map(ip => `<option value="${esc(ip)}">${esc(ip)}</option>`).join('');
+      $('#net-ipv6-replace-form').classList.remove('hide');
+      $('#net-ipv6-replace-form').scrollIntoView({block:'nearest',behavior:'smooth'});
+    } catch (err) { if (target.valid()) toast(err.message, false); }
+    finally { btn.disabled=false; }
+  });
+  $('#btn-net-ipv6-replace-cancel').addEventListener('click', () => $('#net-ipv6-replace-form').classList.add('hide'));
+  $('#net-ipv6-replace-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const target=ipv6ReplaceTarget, oldAddress=$('#net-ipv6-old').value;
+    if (!target?.valid() || !oldAddress) { toast('账号或实例已变化，请重新打开更换 IPv6', false); return; }
+    const btn=$('#btn-net-ipv6-replace-apply'); btn.disabled=true; btn.textContent='更换中…';
+    try {
+      const r=await api('/api/oci/ipv6/replace', {method:'POST',body:{account_id:target.account_id,
+        instance_id:target.instance_id,old_address:oldAddress}});
+      window.loadSessions?.();
+      if (target.valid()) {
+        $('#net-result').textContent=`${r.old_ip} → ${r.new_ip}；${r.message}`;
+        $('#net-ipv6-replace-form').classList.add('hide');
+        toast(r.message, r.replaced);
+      }
+    } catch (err) { if (target.valid()) { $('#net-result').textContent=err.message; toast(err.message,false); } }
+    finally { btn.disabled=false; btn.textContent='确认更换'; }
+  });
   let ipv6PublicTarget;
-  $('#net-instance').addEventListener('change', () => $('#net-ipv6-public-form').classList.add('hide'));
+  $('#net-instance').addEventListener('change', () => {
+    $('#net-ipv6-public-form').classList.add('hide');
+    $('#net-ipv6-replace-form').classList.add('hide');
+  });
   $('#btn-net-ipv6-public').addEventListener('click', async () => {
     const instanceId = $('#net-instance').value, accountId = Number($('#net-account').value);
     if (!instanceId || !accountId) { toast('请先选择账号和实例', false); return; }

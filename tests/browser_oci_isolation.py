@@ -20,6 +20,8 @@ def check_oci_account_switching(page):
           if (mode==='launch' && path.startsWith('/api/oc-info?')) return path.includes('901') ? pending.promise : {ads:['AD-B'],subnets:[{id:'subnet-B',name:'B',public:true}]};
           if (mode==='ipv6' && path==='/api/oci/ipv6') return pending.promise;
           if (mode==='ipv6-public' && path==='/api/oci/ipv6/public') return pending.promise;
+          if (mode==='ipv6-replace' && path==='/api/oci/ipv6/replace') return pending.promise;
+          if (mode==='ipv6-replace' && path.startsWith('/api/cloud/oci/instances?')) return {data:[{id:path.includes('901')?'instance-A':'instance-B',ipv6_addresses:['2001:db8::10','2001:db8::20']}]};
           if ((mode==='ipv6' || mode==='ipv6-public') && path==='/api/ssh/sessions') return {data:[{id:999,name:'B SSH',host:'203.0.113.2',port:22,username:'root',auth_type:'password',tags:'oci:B',proxy_command:'socks5h://127.0.0.1:1080',oci_account_id:902,oci_region:'ap-tokyo-1',oci_instance_id:'instance-B',metadata:{ipv6_addresses:['2001:db8::b']}}]};
           if (path.startsWith('/api/oci/buckets?')) return {data:[{name:'bucket-A',created:''}]};
           if (path.startsWith('/api/oci/objects?')) return {objects:[{name:'file-A',size:1,modified:''}],prefixes:[]};
@@ -82,6 +84,20 @@ def check_oci_account_switching(page):
         assert(writes.at(-1).body.account_id===901 && writes.at(-1).body.ssh_source==='','blank SSH source was not preserved');
         pending.resolve({ipv6:'2001:db8::a',message:'A public configured'}); await tick();
         assert(document.querySelector('#net-result').textContent.includes('A public configured'),'public IPv6 result missing');
+        mode='ipv6-replace'; pending=deferred();
+        document.querySelector('#btn-net-ipv6-replace').click(); await tick();
+        assert(document.querySelector('#net-ipv6-old').options.length===2,'replacement did not list selectable IPv6 addresses');
+        document.querySelector('#net-ipv6-old').value='2001:db8::20';
+        document.querySelector('#net-ipv6-replace-form').requestSubmit(); await tick();
+        const replaceButton=document.querySelector('#btn-net-ipv6-replace-apply');
+        assert(replaceButton.disabled,'replacement allowed duplicate submission');
+        assert(writes.at(-1).body.account_id===901 && writes.at(-1).body.instance_id==='instance-A' && writes.at(-1).body.old_address==='2001:db8::20','replacement used incorrect account, instance or address');
+        select('#net-account','902'); await tick();
+        assert(document.querySelector('#net-ipv6-replace-form').classList.contains('hide'),'replacement form survived account switch');
+        pending.resolve({old_ip:'2001:db8::20',new_ip:'2001:db8::30',replaced:true,message:'A replaced'}); await tick();
+        assert(!document.querySelector('#net-result').textContent.includes('A replaced'),'stale replacement result appeared under B');
+        assert(!replaceButton.disabled,'replacement button remained disabled');
+        select('#net-account','901'); await tick();
         writes=[];
 
         mode='objects'; document.querySelector('#btn-os-load').click(); await tick();

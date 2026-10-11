@@ -331,6 +331,25 @@ def oci_ipv6(body: dict, _: None = Depends(require_auth)):
         raise HTTPException(502, oci_service.fmt_err(e)) from None
 
 
+class Ipv6ReplaceBody(BaseModel):
+    account_id: int
+    instance_id: str
+    old_address: str
+
+
+@api.post("/oci/ipv6/replace")
+def oci_ipv6_replace(body: Ipv6ReplaceBody, _: None = Depends(require_auth)):
+    acct = _account_or_404(body.account_id)
+    try:
+        result = oci_service.replace_ipv6(acct, body.instance_id, body.old_address)
+        result["ssh_sync"] = oci_ssh.sync_instance(acct, {"id": body.instance_id, **result})
+        return result
+    except oci_service.OciError as e:
+        raise HTTPException(400, str(e)) from None
+    except Exception as e:
+        raise HTTPException(502, oci_service.fmt_err(e)) from None
+
+
 class Ipv6PublicBody(BaseModel):
     account_id: int
     instance_id: str

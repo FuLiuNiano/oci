@@ -176,10 +176,17 @@
     <div class="bar" style="margin-top:10px">
       <button id="btn-net-changeip">一键换公网IP</button>
       <button id="btn-net-ipv6">一键添加 IPv6</button>
+      <button id="btn-net-ipv6-replace">更换 IPv6</button>
       <button id="btn-net-ipv6-public">配置 IPv6 公网</button>
       <span id="net-result" class="muted"></span>
     </div>
     <p class="muted">先添加地址，再配置 IPv6 公网。地址自动显示到实例与关联的 SSH 会话；原 SSH 地址、认证和代理保留。路由和安全列表是共享资源，新增规则也会作用于使用它们的其他实例。</p>
+    <form id="net-ipv6-replace-form" class="hide">
+      <h4>更换所选实例的 IPv6</h4>
+      <p class="muted">先申请新地址，确认云端分配后删除选中的旧地址。旧地址上的连接会断开；3x-ui、域名等绑定需要更新，系统可能需要重新获取 IPv6。保留 IPv4、其他 IPv6 及现有路由和安全规则。</p>
+      <label for="net-ipv6-old">要更换的旧 IPv6</label><select id="net-ipv6-old" required></select>
+      <div class="bar"><button id="btn-net-ipv6-replace-apply" type="submit">确认更换</button><button id="btn-net-ipv6-replace-cancel" type="button" class="ghost">取消</button></div>
+    </form>
     <form id="net-ipv6-public-form" class="hide">
       <h4>配置所选实例的 IPv6 公网访问</h4>
       <p class="muted">补齐 ::/0 到现有互联网网关的路由、IPv6 出站和必要的 ICMPv6 规则，保留现有 IPv4 配置。实际连通还取决于 VPS 系统网络和防火墙。</p>
