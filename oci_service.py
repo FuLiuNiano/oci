@@ -194,7 +194,7 @@ def list_instances(acct):
     for ins in _all(compute.list_instances, comp):
         if ins.lifecycle_state in ("TERMINATED", "TERMINATING"):
             continue
-        pub, priv, subnet = "", "", ""
+        pub, priv, subnet, ipv6_addresses = "", "", "", []
         try:
             atts = _all(compute.list_vnic_attachments, comp, instance_id=ins.id)
             if atts:
@@ -204,6 +204,7 @@ def list_instances(acct):
                     pub = vnic.public_ip or ""
                     priv = vnic.private_ip or ""
                     subnet = vnic.subnet_id or ""
+                    ipv6_addresses = list(vnic.ipv6_addresses or [])
         except ServiceError:
             pass
         out.append({
@@ -215,6 +216,7 @@ def list_instances(acct):
             "ocpus": ins.shape_config.ocpus if ins.shape_config else None,
             "memory_gbs": ins.shape_config.memory_in_gbs if ins.shape_config else None,
             "public_ip": pub,
+            "ipv6_addresses": ipv6_addresses,
             "private_ip": priv,
             "subnet_id": subnet,
             "ad": ins.availability_domain,
@@ -474,6 +476,12 @@ def _ipv6_prefixes(resource):
     return prefixes
 
 
+def _ipv6_reply(vnic, addresses, message, **extra):
+    return {"ipv6": addresses[0] if addresses else "", "ipv6_addresses": addresses,
+            "public_ip": vnic.public_ip or "", "private_ip": vnic.private_ip or "",
+            "message": message, **extra}
+
+
 def _wait_ipv6_network(net, getter, resource_id):
     return oci.wait_until(
         net, getter(resource_id),
@@ -517,8 +525,8 @@ def attach_ipv6(acct, instance_id):
         try:
             existing = _all(net.list_ipv6s, vnic_id=vnic.id)
             if existing:
-                return {"ipv6": existing[0].ip_address or "", "reused": True,
-                        "message": "该网卡已有 IPv6，已返回现有地址"}
+                return _ipv6_reply(vnic, [ip.ip_address for ip in existing if ip.ip_address],
+                                   "该网卡已有 IPv6，已返回现有地址", reused=True)
             subnet_response = net.get_subnet(vnic.subnet_id)
             subnet = subnet_response.data
             if not _ipv6_prefixes(subnet):
@@ -546,10 +554,134 @@ def attach_ipv6(acct, instance_id):
                 oci.core.models.CreateIpv6Details(
                     vnic_id=vnic.id, ipv6_subnet_cidr=_ipv6_prefixes(subnet)[0]),
                 opc_retry_token=token(vnic.id)).data
-            return {"ipv6": ip6.ip_address or "", "reused": False,
-                    "message": "IPv6 已分配；公网连通还需路由、安全规则和系统网络配置"}
+            return _ipv6_reply(vnic, [ip6.ip_address] if ip6.ip_address else [],
+                               "IPv6 已分配；可点击配置 IPv6 公网补齐云端路由和安全规则", reused=False)
         except (ServiceError, OciError, OciTransportError, oci.exceptions.MaximumWaitTimeExceeded) as e:
             partial = ("；已提交的 " + "、".join(changed) + " 会保留，可再次点击继续") if changed else ""
+            raise OciError(f"{stage}失败：{fmt_err(e)}{partial}") from None
+
+
+def _ipv6_rule_covers(rule, desired, ingress):
+    field = "source" if ingress else "destination"
+    if rule.is_stateless or getattr(rule, field + "_type", None) not in (None, "CIDR_BLOCK"):
+        return False
+    try:
+        if not ipaddress.IPv6Network(getattr(desired, field)).subnet_of(
+                ipaddress.IPv6Network(getattr(rule, field))):
+            return False
+    except (ValueError, TypeError):
+        return False
+    if rule.protocol == "all":
+        return True
+    if rule.protocol != desired.protocol:
+        return False
+    if rule.protocol == "6":
+        options = rule.tcp_options
+        if options and options.source_port_range is not None:
+            return False
+        ports = options.destination_port_range if options else None
+        wanted = desired.tcp_options.destination_port_range
+        return ports is None or ports.min <= wanted.min <= wanted.max <= ports.max
+    if rule.protocol == "58":
+        options = rule.icmp_options
+        return options is None or (options.type == desired.icmp_options.type
+                                   and options.code in (None, desired.icmp_options.code))
+    return False
+
+
+def configure_ipv6_public(acct, instance_id, ssh_source="", ssh_port=22):
+    """Append missing IPv6 rules with ETags; never overwrite a custom default route."""
+    if ssh_source:
+        try:
+            ssh_source = str(ipaddress.IPv6Network(ssh_source, strict=False))
+            if isinstance(ssh_port, bool) or not isinstance(ssh_port, int) or not 1 <= ssh_port <= 65535:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise OciError("SSH 来源需填写 IPv6 地址或 CIDR，端口需在 1–65535 之间") from None
+    net = _client(oci.core.VirtualNetworkClient, acct)
+    vnic = _primary_vnic(net, compartment_of(acct), instance_id, _client(oci.core.ComputeClient, acct))
+    subnet = net.get_subnet(vnic.subnet_id).data
+    key = (build_config(acct)["tenancy"], acct.get("region"), subnet.vcn_id)
+    with _ipv6_locks_guard:
+        lock = _ipv6_locks.setdefault(key, threading.Lock())
+    changed, stage = [], "检查 IPv6 公网配置"
+    with lock:
+        try:
+            addresses = _all(net.list_ipv6s, vnic_id=vnic.id)
+            if not addresses:
+                raise OciError("请先点击一键添加 IPv6")
+            if subnet.prohibit_internet_ingress or subnet.prohibit_public_ip_on_vnic:
+                raise OciError("该子网禁止互联网入站，不自动更改私有子网设置")
+            # Honour per-address and per-VNIC route table overrides.
+            route_ids = {ip.route_table_id or vnic.route_table_id or subnet.route_table_id for ip in addresses}
+            if len(route_ids) != 1:
+                raise OciError("不同 IPv6 地址使用不同路由表，已阻止批量修改，请先核对路由覆盖设置")
+            route_id = route_ids.pop()
+            if not route_id or not subnet.security_list_ids:
+                raise OciError("子网缺少路由表或安全列表，请先补齐网络配置")
+            route_response = net.get_route_table(route_id)
+            route = route_response.data
+            if route.vcn_id != subnet.vcn_id:
+                raise OciError("路由表不属于当前实例的 VCN，已阻止修改")
+            rules = list(route.route_rules or [])
+            gateway_rule = next((r for r in rules if (r.destination or r.cidr_block) == "0.0.0.0/0"), None)
+            if gateway_rule:
+                gateway = net.get_internet_gateway(gateway_rule.network_entity_id).data
+            else:
+                gateways = [g for g in _all(net.list_internet_gateways, subnet.compartment_id, vcn_id=subnet.vcn_id)
+                            if g.is_enabled and g.lifecycle_state == "AVAILABLE"]
+                if len(gateways) != 1:
+                    raise OciError("没有唯一可用的互联网网关，不自动创建或猜测网关")
+                gateway = gateways[0]
+            if gateway.vcn_id != subnet.vcn_id or not gateway.is_enabled or gateway.lifecycle_state != "AVAILABLE":
+                raise OciError("互联网网关未启用或不属于当前 VCN")
+            defaults = [r for r in rules if (r.destination or r.cidr_block) == "::/0"]
+            if any(r.network_entity_id != gateway.id for r in defaults):
+                raise OciError("已有 IPv6 默认路由指向其他目标，已保留原路由，请核对网络设计")
+            security_responses = [net.get_security_list(sid) for sid in subnet.security_list_ids]
+            if any(r.data.vcn_id != subnet.vcn_id for r in security_responses):
+                raise OciError("安全列表不属于当前实例的 VCN，已阻止修改")
+            ingress = [oci.core.models.IngressSecurityRule(
+                source="::/0", source_type="CIDR_BLOCK", protocol="58", is_stateless=False,
+                icmp_options=oci.core.models.IcmpOptions(type=2, code=0), description="OCI Panel IPv6 PMTU")]
+            if ssh_source:
+                ingress.append(oci.core.models.IngressSecurityRule(
+                    source=ssh_source, source_type="CIDR_BLOCK", protocol="6", is_stateless=False,
+                    tcp_options=oci.core.models.TcpOptions(destination_port_range=oci.core.models.PortRange(
+                        min=ssh_port, max=ssh_port)), description="OCI Panel IPv6 SSH"))
+            egress = [oci.core.models.EgressSecurityRule(
+                destination="::/0", destination_type="CIDR_BLOCK", protocol="all", is_stateless=False,
+                description="OCI Panel IPv6 outbound")]
+            def missing(wanted, incoming):
+                current = [rule for response in security_responses for rule in
+                           (response.data.ingress_security_rules if incoming else response.data.egress_security_rules) or []]
+                return [rule for rule in wanted if not any(_ipv6_rule_covers(existing, rule, incoming) for existing in current)]
+            new_ingress, new_egress = missing(ingress, True), missing(egress, False)
+            if not defaults:
+                stage = "添加 IPv6 默认路由"
+                if not route_response.headers.get("etag"):
+                    raise OciError("路由表缺少版本标识，已阻止覆盖写入，请重试")
+                net.update_route_table(route.id, oci.core.models.UpdateRouteTableDetails(route_rules=rules + [
+                    oci.core.models.RouteRule(destination="::/0", destination_type="CIDR_BLOCK",
+                                              network_entity_id=gateway.id, description="OCI Panel IPv6 internet")]),
+                    if_match=route_response.headers.get("etag"))
+                changed.append("IPv6 路由")
+            if new_ingress or new_egress:
+                stage = "补齐 IPv6 安全规则"
+                response = security_responses[0]
+                security = response.data
+                if not response.headers.get("etag"):
+                    raise OciError("安全列表缺少版本标识，已阻止覆盖写入，请重试")
+                net.update_security_list(security.id, oci.core.models.UpdateSecurityListDetails(
+                    ingress_security_rules=list(security.ingress_security_rules or []) + new_ingress,
+                    egress_security_rules=list(security.egress_security_rules or []) + new_egress),
+                    if_match=response.headers.get("etag"))
+                changed.append("IPv6 安全规则")
+            return _ipv6_reply(vnic, [ip.ip_address for ip in addresses if ip.ip_address],
+                               "云端 IPv6 公网配置已补齐；实际连通还取决于系统网络与防火墙",
+                               changed=changed, ssh_enabled=bool(ssh_source))
+        except (ServiceError, OciError, OciTransportError) as e:
+            partial = "；已完成的 " + "、".join(changed) + " 会保留，可重试补齐" if changed else ""
             raise OciError(f"{stage}失败：{fmt_err(e)}{partial}") from None
 
 

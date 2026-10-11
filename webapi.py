@@ -16,6 +16,7 @@ import email_service
 import mcp_service
 import notify
 import oci_service
+import oci_ssh
 import sshpool
 import store
 import host_monitor
@@ -247,7 +248,11 @@ class ActionBody(BaseModel):
 def cloud_instances(platform: str, account_id: int, _: None = Depends(require_auth)):
     if platform != "oci":
         raise HTTPException(400, "此版本仅支持 Oracle Cloud")
-    return {"data": _wrap(oci_service.list_instances, _account_or_404(account_id))}
+    acct = _account_or_404(account_id)
+    rows = _wrap(oci_service.list_instances, acct)
+    for row in rows:
+        oci_ssh.sync_instance(acct, row)
+    return {"data": rows}
 
 
 @api.post("/cloud/{platform}/action")
@@ -316,9 +321,39 @@ def oci_assign_reserved_ip(public_ip_id: str, body: dict, _: None = Depends(requ
 def oci_ipv6(body: dict, _: None = Depends(require_auth)):
     acct = _account_or_404(body["account_id"])
     try:
-        return oci_service.attach_ipv6(acct, body["instance_id"])
+        result = oci_service.attach_ipv6(acct, body["instance_id"])
+        result["ssh_sync"] = oci_ssh.sync_instance(acct, {"id": body["instance_id"], **result})
+        return result
     except oci_service.OciError as e:
         # A handled network prerequisite/permission error is not a broken gateway.
+        raise HTTPException(400, str(e)) from None
+    except Exception as e:
+        raise HTTPException(502, oci_service.fmt_err(e)) from None
+
+
+class Ipv6PublicBody(BaseModel):
+    account_id: int
+    instance_id: str
+    ssh_source: str = ""
+    ssh_port: int = 22
+    ssh_session_id: Optional[int] = None
+
+
+@api.post("/oci/ipv6/public")
+def oci_ipv6_public(body: Ipv6PublicBody, _: None = Depends(require_auth)):
+    acct = _account_or_404(body.account_id)
+    try:
+        if body.ssh_session_id is not None:
+            core = __import__("oci").core
+            net = oci_service._client(core.VirtualNetworkClient, acct)
+            vnic = oci_service._primary_vnic(net, oci_service.compartment_of(acct), body.instance_id,
+                                           oci_service._client(core.ComputeClient, acct))
+            oci_ssh.validate_binding(acct, {"id": body.instance_id, "public_ip": vnic.public_ip,
+                                          "private_ip": vnic.private_ip, "ipv6_addresses": vnic.ipv6_addresses}, body.ssh_session_id)
+        result = oci_service.configure_ipv6_public(acct, body.instance_id, body.ssh_source.strip(), body.ssh_port)
+        result["ssh_sync"] = oci_ssh.sync_instance(acct, {"id": body.instance_id, **result}, session_id=body.ssh_session_id)
+        return result
+    except oci_service.OciError as e:
         raise HTTPException(400, str(e)) from None
     except Exception as e:
         raise HTTPException(502, oci_service.fmt_err(e)) from None
@@ -782,7 +817,9 @@ class SshBody(BaseModel):
 
 @api.get("/ssh/sessions")
 def ssh_sessions(_: None = Depends(require_auth)):
-    rows = store.query("SELECT * FROM ssh_sessions ORDER BY id")
+    rows = store.query("SELECT s.*, l.account_id AS oci_account_id, l.region AS oci_region, "
+                       "l.instance_id AS oci_instance_id FROM ssh_sessions s LEFT JOIN oci_ssh_links l "
+                       "ON l.session_id=s.id ORDER BY s.id")
     out = []
     for r in rows:
         try:
@@ -846,6 +883,7 @@ def ssh_session_update(session_id: int, body: SshBody, _: None = Depends(require
 def ssh_session_delete(session_id: int, _: None = Depends(require_auth)):
     _ssh_or_404(session_id)
     store.execute("DELETE FROM ssh_sessions WHERE id=?", (session_id,))
+    store.execute("DELETE FROM oci_ssh_links WHERE session_id=?", (session_id,))
     sshpool.close_session_connections(session_id)
     return {"ok": True}
 
@@ -1031,18 +1069,8 @@ def ssh_sync_cloud(body: dict, _: None = Depends(require_auth)):
         raise HTTPException(502, str(e))
     created = 0
     for r in rows:
-        ip = r.get("public_ip") or r.get("private_ip") or ""
-        if not ip:
-            continue
-        metadata = store.json.dumps({k: r.get(k) for k in ("shape", "spec", "ocpus", "memory_gbs", "state")})
-        if store.query("SELECT id FROM ssh_sessions WHERE host=?", (ip,)):
-            store.execute("UPDATE ssh_sessions SET metadata=? WHERE host=?", (metadata, ip))
-            continue
-        store.execute(
-            "INSERT INTO ssh_sessions(name, host, username, auth_type, tags, metadata) VALUES(?,?,?,?,?,?)",
-            (r.get("name") or ip, ip, body.get("username", "root"), "password",
-             acct["platform"] + ":" + (acct["name"] or ""), metadata))
-        created += 1
+        result = oci_ssh.sync_instance(acct, r, create=True, username=body.get("username", "root"))
+        created += result["created"]
     return {"created": created, "found": len(rows)}
 
 

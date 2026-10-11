@@ -59,6 +59,13 @@ CREATE TABLE IF NOT EXISTS ssh_sessions (
     monitor_disk INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+CREATE TABLE IF NOT EXISTS oci_ssh_links (
+    account_id INTEGER NOT NULL,
+    region TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    session_id INTEGER NOT NULL UNIQUE,
+    PRIMARY KEY(account_id, region, instance_id)
+);
 CREATE TABLE IF NOT EXISTS domains (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

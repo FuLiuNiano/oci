@@ -136,8 +136,8 @@ def test_cgroup_metrics_use_container_limit_not_host_capacity(monkeypatch):
 
 def test_cloud_sync_updates_metadata_preserving_saved_credentials(client, account, monkeypatch):
     sid = client.post("/api/ssh/sessions", json={"name":"custom", "host":"203.0.113.10",
-                     "username":"ubuntu", "secret":"synthetic-sync-secret"}).json()["id"]
-    monkeypatch.setattr(oci_service, "list_instances", lambda _: [{"name":"cloud-name", "public_ip":"203.0.113.10",
+                     "username":"ubuntu", "secret":"synthetic-sync-secret", "tags":"oci:" + account["name"]}).json()["id"]
+    monkeypatch.setattr(oci_service, "list_instances", lambda _: [{"id":"instance1", "name":"cloud-name", "public_ip":"203.0.113.10",
         "shape":"VM.Standard.A1.Flex", "spec":"2C/12G", "memory_gbs":12, "state":"RUNNING"}])
     result = client.post("/api/ssh/sync-cloud", json={"account_id":account["id"]})
     assert result.status_code == 200 and result.json()["created"] == 0

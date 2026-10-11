@@ -176,9 +176,20 @@
     <div class="bar" style="margin-top:10px">
       <button id="btn-net-changeip">一键换公网IP</button>
       <button id="btn-net-ipv6">一键添加 IPv6</button>
+      <button id="btn-net-ipv6-public">配置 IPv6 公网</button>
       <span id="net-result" class="muted"></span>
     </div>
-    <p class="muted">添加 IPv6 会自动开启实例所属 VCN 和子网的 IPv6，已有地址会复用。同一网络的其他实例也会看到新增前缀；公网连通仍需配置路由、安全规则和系统网络。</p>
+    <p class="muted">先添加地址，再配置 IPv6 公网。地址自动显示到实例与关联的 SSH 会话；原 SSH 地址、认证和代理保留。路由和安全列表是共享资源，新增规则也会作用于使用它们的其他实例。</p>
+    <form id="net-ipv6-public-form" class="hide">
+      <h4>配置所选实例的 IPv6 公网访问</h4>
+      <p class="muted">补齐 ::/0 到现有互联网网关的路由、IPv6 出站和必要的 ICMPv6 规则，保留现有 IPv4 配置。实际连通还取决于 VPS 系统网络和防火墙。</p>
+      <div class="form-grid">
+        <div><label for="net-ipv6-ssh-source">允许 SSH 的来源 IPv6 / CIDR（留空不开放 SSH 入站）</label><input id="net-ipv6-ssh-source" placeholder="你的 IPv6/128；::/0 表示允许所有 IPv6 来源"></div>
+        <div><label for="net-ipv6-ssh-port">SSH 端口</label><input id="net-ipv6-ssh-port" type="number" min="1" max="65535" value="22" required></div>
+        <div><label for="net-ipv6-ssh-session">关联已有 SSH 会话（旧会话未关联时可选择一次）</label><select id="net-ipv6-ssh-session"><option value="">自动更新已关联的会话</option></select></div>
+      </div>
+      <div class="bar"><button id="btn-net-ipv6-apply" type="submit">应用公网配置</button><button id="btn-net-ipv6-cancel" type="button" class="ghost">取消</button></div>
+    </form>
   </div>
   <div class="card"><h3 class="sec" style="margin-top:0">OCI 保留 IP</h3>
     <div class="bar"><button id="btn-rip-load">加载保留IP</button><button id="btn-rip-new" class="ghost">新建保留IP</button></div>

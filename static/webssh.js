@@ -269,10 +269,11 @@
   }
   window.loadSessions = loadSessions;
 
-  window.openCloudInstanceSsh = async function (host) {
+  window.openCloudInstanceSsh = async function (host, identity) {
     switchView("ssh");
     await loadSessions();
-    const sess = state.sessions.find(s => s.host === host);
+    const sess = identity ? state.sessions.find(s => s.oci_account_id === identity.accountId &&
+      s.oci_instance_id === identity.instanceId && s.oci_region === identity.region) : state.sessions.find(s => s.host === host);
     if (sess) openTerminal(sess.id);
     else {
       $("#session-search").value = host;
@@ -293,7 +294,7 @@
 
   function renderSessionCards() {
     const query = $("#session-search").value.trim().toLowerCase();
-    const sessions = state.sessions.filter(s => `${s.name} ${s.host} ${s.username} ${s.tags}`.toLowerCase().includes(query));
+    const sessions = state.sessions.filter(s => `${s.name} ${s.host} ${s.username} ${s.tags} ${(s.metadata?.ipv6_addresses || []).join(' ')}`.toLowerCase().includes(query));
     $("#session-count").textContent = state.sessions.length;
     $("#ssh-session-list").innerHTML = sessions.map(s => {
       const m = s.metadata || {};
@@ -303,7 +304,8 @@
         <div class="session-title"><span class="session-avatar">${uiIcon("terminal")}</span><h3 title="${esc(s.name)}">${esc(s.name)}</h3><span class="auth-pill">${s.auth_type === "key" ? "密钥" : "密码"}</span></div>
         <p class="session-spec" title="${esc(m.shape || "")}">${esc(m.shape || "手动保存的 SSH 会话")}</p>
         <div class="session-badges">${m.spec ? `<span class="chip blue">${esc(m.spec)}</span>` : ""}${m.memory_gbs ? `<span class="chip amber">${esc(m.memory_gbs)} GB</span>` : ""}${(s.tags || "").split(",").filter(Boolean).map(tag => `<span class="chip">${esc(tag.trim())}</span>`).join("")}</div>
-        <div class="session-address">${uiIcon("server")}<code>${esc(s.host)}:${s.port}</code><button class="ghost tiny" data-saddress="${s.id}" aria-label="复制地址" title="复制地址">${uiIcon("copy")}</button></div>
+        <div class="session-address">${uiIcon("server")}<code>${esc(s.host.includes(':') ? '[' + s.host + ']' : s.host)}:${s.port}</code><button class="ghost tiny" data-saddress="${s.id}" aria-label="复制地址" title="复制地址">${uiIcon("copy")}</button></div>
+        ${(m.ipv6_addresses || []).map(ip => `<div class="session-address"><span class="muted">IPv6</span><code title="${esc(ip)}">${esc(ip)}</code><button class="ghost tiny" data-sipv6copy="${esc(ip)}" data-port="${s.port}" title="复制 IPv6 SSH 地址">${uiIcon('copy')}</button></div>`).join('')}
         <div class="session-user"><span class="user-dot"></span>${esc(s.username)}<span class="muted">${s.proxy_command ? "通过服务器代理连接" : "面板服务器直连"}</span></div>
         <div class="session-footer"><span class="connection-status ${status === "已连接" || status === "检测成功" ? "online" : ""}"><i></i>${esc(status)}</span><div>
           ${action("data-sopen", "打开终端", "play")}${action("data-scopy", "复制会话", "copy")}${action("data-sedit", "编辑会话", "edit")}${action("data-sdel", "删除会话", "trash", true)}
@@ -316,6 +318,12 @@
   window.sshViewLoaded = function () { renderSessionCards(); loadSessions(); };
 
   $("#ssh-session-list").addEventListener("click", async (e) => {
+    const ipv6Copy = e.target.closest('[data-sipv6copy]');
+    if (ipv6Copy) {
+      try { await navigator.clipboard.writeText(`[${ipv6Copy.dataset.sipv6copy}]:${ipv6Copy.dataset.port}`); toast('IPv6 SSH 地址已复制'); }
+      catch { toast('复制失败，请手动复制', false); }
+      return;
+    }
     const open = e.target.closest("[data-sopen]");
     const sftp = e.target.closest("[data-ssftp]");
     const edit = e.target.closest("[data-sedit]");
@@ -331,7 +339,7 @@
     }
     if (address) {
       const s = state.sessions.find(s => s.id === Number(address.dataset.saddress));
-      try { await navigator.clipboard.writeText(`${s.host}:${s.port}`); toast("地址已复制"); }
+      try { await navigator.clipboard.writeText(`${s.host.includes(':') ? '[' + s.host + ']' : s.host}:${s.port}`); toast("地址已复制"); }
       catch { toast("浏览器不允许复制，请手动选择地址", false); }
       return;
     }

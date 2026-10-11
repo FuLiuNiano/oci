@@ -20,6 +20,7 @@
   function invalidateAccountView(selector) {
     accountEpochs.set(selector, (accountEpochs.get(selector) || 0) + 1);
     ownedViews[selector].forEach(s => $(s).replaceChildren());
+    if (selector === '#net-account') $('#net-ipv6-public-form').classList.add('hide');
     if (selector === '#l-account') $('#l-bootvol').value = '';
     if (selector === '#vol-account') { $('#newvol-form').classList.add('hide'); $('#nv-ad').value = ''; }
     if (selector === '#usr-account') {
@@ -84,17 +85,18 @@
       const volume = bootByInstance.get(i.id);
       const op = (act, label, disabled = false, danger = false) =>
         `<button data-act="${act}" data-id="${d(i.id)}" data-name="${d(i.name)}" ${disabled ? "disabled" : ""} ${danger ? 'class="danger"' : ""}>${label}</button>`;
-      return `<article class="instance-card" data-instance-id="${d(i.id)}" data-host="${d(i.public_ip)}">
+      return `<article class="instance-card" data-instance-id="${d(i.id)}" data-host="${d(i.public_ip || i.ipv6_addresses?.[0] || '')}">
         <div class="instance-card-head"><strong title="${d(i.name)}">${d(i.name)}</strong>${stateBadge(i.state)}</div>
         <dl class="instance-facts">
           <dt>公网 IP</dt><dd>${d(i.public_ip || "未分配")}</dd>
+          ${isOci ? `<dt>IPv6</dt><dd>${(i.ipv6_addresses || []).map(d).join('<br>') || '未分配'}</dd>` : ''}
           <dt>Shape</dt><dd title="${d(i.shape)}">${d(i.shape)}</dd>
           <dt>规格</dt><dd>${d(i.spec || "—")}</dd>
           <dt>启动盘</dt><dd>${volume ? `${d(volume.size_gbs)} GB · VPU ${d(volume.vpus ?? "—")} · ${d(volume.state)}` : "暂未读取到"}</dd>
           <dt>创建时间</dt><dd>${d(i.created || "—")}</dd>
         </dl>
         <div class="instance-actions">
-          ${op("ssh", "〉_ SSH", !i.public_ip)}
+          ${op("ssh", "〉_ SSH", !i.public_ip && !i.ipv6_addresses?.length)}
           ${op("STOP", "关机", i.state !== "RUNNING")}
           ${op("REBOOT", "重启", i.state !== "RUNNING")}
           ${op("console", "串口日志")}
@@ -135,7 +137,7 @@
     const acct = acctById(instAccount());
     const isOci = acct.platform === "oci";
     try {
-      if (act === "ssh") { await window.openCloudInstanceSsh(btn.closest(".instance-card").dataset.host); return; }
+      if (act === "ssh") { await window.openCloudInstanceSsh(btn.closest(".instance-card").dataset.host, {accountId:acct.id, instanceId:id, region:acct.region}); return; }
       if (act === "boot") {
         $("#vol-account").value = String(acct.id);
         switchView("volumes");
@@ -203,6 +205,7 @@
         toast("正在检查并开启网络 IPv6，请稍候…");
         try {
           const r = await api("/api/oci/ipv6", { method: "POST", body: { account_id: acct.id, instance_id: id } });
+          window.loadSessions?.();
           if (valid()) {
             toast(`${r.ipv6 || "已分配"}；${r.message || "IPv6 已附加"}`); loadInstances(true);
           }
@@ -468,7 +471,8 @@
     } catch (e) { toast(e.message, false); }
   });
   $("#btn-net-ipv6").addEventListener("click", async () => {
-    const valid = accountGuard('#net-account');
+    const accountValid = accountGuard('#net-account'), instanceId = $('#net-instance').value;
+    const valid = () => accountValid() && $('#net-instance').value === instanceId;
     if (!$('#net-instance').value) { toast('请先加载并选择当前账号的实例', false); return; }
     const btn = $("#btn-net-ipv6");
     btn.disabled = true;
@@ -477,10 +481,53 @@
     try {
       const r = await api("/api/oci/ipv6", { method: "POST", body: {
         account_id: Number($("#net-account").value), instance_id: $("#net-instance").value }});
+      window.loadSessions?.();
       if (valid()) $("#net-result").textContent = `IPv6: ${r.ipv6 || "已附加"}；${r.message || ""}`;
     } catch (e) {
       if (valid()) { $("#net-result").textContent = e.message; toast(e.message, false); }
     } finally { btn.disabled = false; btn.textContent = "一键添加 IPv6"; }
+  });
+
+  let ipv6PublicTarget;
+  $('#net-instance').addEventListener('change', () => $('#net-ipv6-public-form').classList.add('hide'));
+  $('#btn-net-ipv6-public').addEventListener('click', async () => {
+    const instanceId = $('#net-instance').value, accountId = Number($('#net-account').value);
+    if (!instanceId || !accountId) { toast('请先选择账号和实例', false); return; }
+    const accountValid = accountGuard('#net-account');
+    ipv6PublicTarget = {account_id:accountId, instance_id:instanceId,
+      valid:() => accountValid() && $('#net-instance').value === instanceId};
+    const target = ipv6PublicTarget;
+    await window.loadSessions?.();
+    if (!target.valid()) return;
+    $('#net-ipv6-ssh-session').innerHTML = '<option value="">自动更新已关联的会话</option>' +
+      state.sessions.filter(s => !s.oci_account_id || (s.oci_account_id === accountId && s.oci_instance_id === instanceId))
+        .map(s => `<option value="${s.id}">${esc(s.name)} · ${esc(s.host)} · ${s.proxy_command ? '代理' : '直连'}</option>`).join('');
+    $('#net-ipv6-public-form').classList.remove('hide');
+    $('#net-ipv6-public-form').scrollIntoView({block:'nearest', behavior:'smooth'});
+  });
+  $('#btn-net-ipv6-cancel').addEventListener('click', () => $('#net-ipv6-public-form').classList.add('hide'));
+  $('#net-ipv6-ssh-session').addEventListener('change', () => {
+    const session = state.sessions.find(s => s.id === Number($('#net-ipv6-ssh-session').value));
+    if (session) $('#net-ipv6-ssh-port').value = session.port;
+  });
+  $('#net-ipv6-public-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const target = ipv6PublicTarget;
+    if (!target?.valid()) { toast('账号或实例已切换，请重新打开公网配置', false); return; }
+    const btn = $('#btn-net-ipv6-apply');
+    btn.disabled = true; btn.textContent = '配置中…';
+    try {
+      const r = await api('/api/oci/ipv6/public', {method:'POST', body:{
+        account_id:target.account_id, instance_id:target.instance_id,
+        ssh_source:$('#net-ipv6-ssh-source').value.trim(), ssh_port:Number($('#net-ipv6-ssh-port').value),
+        ssh_session_id:Number($('#net-ipv6-ssh-session').value) || null}});
+      window.loadSessions?.();
+      if (target.valid()) {
+        $('#net-result').textContent = `${r.ipv6 || ''}；${r.message}`;
+        $('#net-ipv6-public-form').classList.add('hide');
+      }
+    } catch (err) { if (target.valid()) { $('#net-result').textContent=err.message; toast(err.message, false); } }
+    finally { btn.disabled=false; btn.textContent='应用公网配置'; }
   });
 
   async function loadReserved() {

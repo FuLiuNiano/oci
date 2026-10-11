@@ -19,6 +19,8 @@ def check_oci_account_switching(page):
           if (mode==='users' && path.startsWith('/api/oci/users?')) return pending.promise;
           if (mode==='launch' && path.startsWith('/api/oc-info?')) return path.includes('901') ? pending.promise : {ads:['AD-B'],subnets:[{id:'subnet-B',name:'B',public:true}]};
           if (mode==='ipv6' && path==='/api/oci/ipv6') return pending.promise;
+          if (mode==='ipv6-public' && path==='/api/oci/ipv6/public') return pending.promise;
+          if ((mode==='ipv6' || mode==='ipv6-public') && path==='/api/ssh/sessions') return {data:[{id:999,name:'B SSH',host:'203.0.113.2',port:22,username:'root',auth_type:'password',tags:'oci:B',proxy_command:'socks5h://127.0.0.1:1080',oci_account_id:902,oci_region:'ap-tokyo-1',oci_instance_id:'instance-B',metadata:{ipv6_addresses:['2001:db8::b']}}]};
           if (path.startsWith('/api/oci/buckets?')) return {data:[{name:'bucket-A',created:''}]};
           if (path.startsWith('/api/oci/objects?')) return {objects:[{name:'file-A',size:1,modified:''}],prefixes:[]};
           return {data:[]};
@@ -59,6 +61,27 @@ def check_oci_account_switching(page):
         assert(writes.at(-1).body.account_id===902 && writes.at(-1).body.instance_id==='instance-B','B IPv6 reused A target');
         pending.resolve({ipv6:'2001:db8::b',message:'IPv6 assigned'}); await tick();
         assert(document.querySelector('#net-result').textContent.includes('2001:db8::b'),'IPv6 success address was not displayed');
+        assert(document.querySelector('#ssh-session-list').textContent.includes('2001:db8::b'),'SSH card did not display IPv6');
+        assert(document.querySelector('#ssh-session-list').textContent.includes('203.0.113.2:22'),'IPv6 metadata replaced SSH host');
+        mode='ipv6-public'; pending=deferred();
+        document.querySelector('#btn-net-ipv6-public').click(); await tick();
+        document.querySelector('#net-ipv6-ssh-source').value='2001:db8::1/128';
+        document.querySelector('#net-ipv6-ssh-port').value='2222';
+        document.querySelector('#net-ipv6-public-form').requestSubmit(); await tick();
+        assert(writes.at(-1).body.account_id===902 && writes.at(-1).body.instance_id==='instance-B','public IPv6 configured wrong target');
+        assert(writes.at(-1).body.ssh_source==='2001:db8::1/128' && writes.at(-1).body.ssh_port===2222,'public IPv6 SSH input was lost');
+        select('#net-account','901'); await tick();
+        assert(document.querySelector('#net-ipv6-public-form').classList.contains('hide'),'old public IPv6 form survived account switch');
+        pending.resolve({ipv6:'2001:db8::b',message:'B public configuration'}); await tick();
+        assert(!document.querySelector('#net-result').textContent.includes('B public configuration'),'old public result appeared under A');
+        document.querySelector('#net-instance').innerHTML='<option value="instance-A">A</option>';
+        pending=deferred();
+        document.querySelector('#btn-net-ipv6-public').click(); await tick();
+        document.querySelector('#net-ipv6-ssh-source').value='';
+        document.querySelector('#net-ipv6-public-form').requestSubmit(); await tick();
+        assert(writes.at(-1).body.account_id===901 && writes.at(-1).body.ssh_source==='','blank SSH source was not preserved');
+        pending.resolve({ipv6:'2001:db8::a',message:'A public configured'}); await tick();
+        assert(document.querySelector('#net-result').textContent.includes('A public configured'),'public IPv6 result missing');
         writes=[];
 
         mode='objects'; document.querySelector('#btn-os-load').click(); await tick();
@@ -72,5 +95,5 @@ def check_oci_account_switching(page):
         assert(document.querySelector('#os-files').classList.contains('hide'),'old bucket panel remained after switch');
         assert(!document.querySelector('#os-table').textContent.includes('file-A'),'old file remained after switch');
         assert(writes.length===0,'account switch submitted a mutation using stale resources');
-      } finally { api=original; await reloadAccounts(); }
+      } finally { api=original; await reloadAccounts(); await window.loadSessions(); }
     }""")
