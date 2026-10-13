@@ -68,6 +68,7 @@ server.run()
                     page.goto(base+details[0].split(': ',1)[1])
                     page.fill('#login-user',details[1].split(': ',1)[1]); page.fill('#login-pass',details[2].split(': ',1)[1]); page.click('#btn-login')
                     page.locator('#app').wait_for(state='visible')
+                    page.click('#cloud-nav details[data-nav-group="aws"] > summary')
                     page.click('nav button[data-view="aws"]')
                     page.wait_for_function("document.querySelector('#aws-identity').textContent.includes('尚未配置')")
                     def add(name,number,proxy):
@@ -119,7 +120,8 @@ server.run()
                     page.screenshot(path=str(Path(tempfile.gettempdir())/'oci-aws-preview.png'),full_page=True)
                     page.set_viewport_size({'width':390,'height':844})
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 2')
-                    page.click('nav button[data-view="accounts"]',force=True)
+                    page.click('#cloud-nav details[data-nav-group="oci"] > summary')
+                    page.click('nav button[data-view="accounts"]')
                     assert page.locator('#a-platform option').count()==1
                     assert not errors,errors
                     browser.close()

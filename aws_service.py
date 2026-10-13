@@ -89,11 +89,13 @@ class Client:
         try:
             serialized = create_serializer(service_model.protocol).serialize_to_request(params, op)
             signing_name = service_model.metadata.get('signingName', service_model.endpoint_prefix)
-            url = f'https://{service_model.endpoint_prefix}.{self.region}.amazonaws.com' + serialized['url_path']
+            request_region = 'us-east-1' if service == 'ce' else self.region
+            endpoint = 'ce.us-east-1.amazonaws.com' if service == 'ce' else f'{service_model.endpoint_prefix}.{request_region}.amazonaws.com'
+            url = 'https://' + endpoint + serialized['url_path']
             query = serialized.get('query_string')
             if query: url += '?' + (urlencode(query) if isinstance(query, dict) else query)
             request = AWSRequest(method=serialized['method'], url=url, data=serialized['body'], headers=serialized['headers'])
-            SigV4Auth(self.credentials, signing_name, self.region).add_auth(request)
+            SigV4Auth(self.credentials, signing_name, request_region).add_auth(request)
             prepared = request.prepare()
             response = self.session.request(prepared.method, prepared.url, data=prepared.body,
                 headers=dict(prepared.headers), proxies=dict(self.proxies), timeout=(15,45), allow_redirects=False)

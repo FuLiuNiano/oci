@@ -51,6 +51,8 @@ def get_account(aid, expected=None):
     rows = store.query('SELECT * FROM aws_accounts WHERE id=?',(aid,))
     if not rows: raise HTTPException(404,'AWS 账号不存在')
     account = rows[0]
+    if store.account_disabled('aws', aid):
+        raise HTTPException(409,'该 AWS 配置已停用，请先启用')
     if expected is not None and not hmac.compare_digest(expected,revision(account)):
         raise HTTPException(409,'AWS 凭据、区域或线路已改变，请刷新账号后重试')
     return account

@@ -100,6 +100,8 @@ def init_db():
         ssh_columns = {r[1] for r in conn.execute("PRAGMA table_info(ssh_sessions)")}
         if "metadata" not in ssh_columns:
             conn.execute("ALTER TABLE ssh_sessions ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+        if "region" not in ssh_columns:
+            conn.execute("ALTER TABLE ssh_sessions ADD COLUMN region TEXT NOT NULL DEFAULT ''")
         if os.name != "nt":
             os.chmod(DATA_DIR, 0o700)
             os.chmod(DB_PATH, 0o600)
@@ -150,6 +152,25 @@ def set_json_setting(key, value):
     set_setting(key, json.dumps(value, ensure_ascii=False))
 
 
+def update_json_setting_version(key, version, value):
+    """Save worker results only while the user's configuration is unchanged."""
+    with _lock:
+        conn = _get_conn()
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        if not row:
+            return False
+        try:
+            current = json.loads(row[0])
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(current, dict) or current.get("version") != version:
+            return False
+        changed = conn.execute("UPDATE settings SET value=? WHERE key=? AND value=?",
+                               (json.dumps(value, ensure_ascii=False), key, row[0])).rowcount
+        conn.commit()
+        return bool(changed)
+
+
 # ---------- 账号参数存取 ----------
 
 def account_params(acct):
@@ -160,6 +181,10 @@ def account_params(acct):
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}
+
+
+def account_disabled(platform, account_id):
+    return bool(get_json_setting(f"account_disabled:{platform}:{account_id}", False))
 
 
 def account_public(acct):

@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="static/manga.css">
 <link rel="stylesheet" href="static/gcp.css">
 <link rel="stylesheet" href="static/aws.css">
+<link rel="stylesheet" href="static/cloud-tools.css">
 </head>
 <body>
 <header>
@@ -39,8 +40,9 @@
 </div>
 
 <main id="app" class="hide">
-<nav>
+<nav id="cloud-nav" aria-label="云平台导航">
   <button data-view="ssh" class="active">SSH 终端</button>
+  <details data-nav-group="oci" open><summary>Oracle / 甲骨文</summary>
   <button data-view="overview">概览</button>
   <button data-view="instances">实例</button>
   <button data-view="diagnostics">配置体检</button>
@@ -53,8 +55,17 @@
   <button data-view="domains">域名监控</button>
   <button data-view="mail">邮件服务</button>
   <button data-view="accounts">云账号</button>
+  <button data-view="oci-tools">账号与自动化工具</button>
+  </details>
+  <details data-nav-group="aws"><summary>AWS</summary>
+  <button data-view="aws">Lightsail 管理</button>
+  <button data-view="ec2">EC2 管理</button>
+  <button data-view="aws-tools">费用 / 配额 / 状态</button>
+  </details>
+  <details data-nav-group="gcp"><summary>GCP</summary>
   <button data-view="gcp">GCP 管理</button>
-  <button data-view="aws">AWS Lightsail</button>
+  <button data-view="gcp-tools">项目概览 / 配额 / 状态</button>
+  </details>
   <button data-view="settings">设置</button>
 </nav>
 <!-- 概览 -->
@@ -287,6 +298,7 @@
       <div><label>用户名</label><input id="ss-user" value="root"></div>
       <div><label>认证方式</label><select id="ss-authtype"><option value="password">密码</option><option value="key">私钥</option></select></div>
       <div><label>标签</label><input id="ss-tags" placeholder="oracle,sg"></div>
+      <div><label>地区（手动会话可填写）</label><input id="ss-region" maxlength="80" placeholder="例如：日本东京 / 德国"></div>
       <div><label>SOCKS5 代理（可选，失败时禁止直连）</label><input id="ss-proxy" placeholder="socks5h://地址:1080 或 socks5h://用户名:密码@地址:1080"></div>
     </div>
     <label class="muted" style="font-size:12px;display:block;margin:10px 0 3px">密码 或 私钥 PEM（编辑时留空=不改）</label>
@@ -505,6 +517,7 @@
 <script src="static/dashboard.js"></script>
 <script src="static/gcp.js"></script>
 <script src="static/aws.js"></script>
+<script src="static/cloud-tools.js"></script>
 
 </body>
 </html>

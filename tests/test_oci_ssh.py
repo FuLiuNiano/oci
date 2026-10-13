@@ -118,3 +118,33 @@ def test_repeated_private_ip_is_not_proof_for_manual_binding(account):
     sid = saved_session(account, host="10.0.0.2", tag="manual")
     with pytest.raises(oci_service.OciError, match="公网地址"):
         oci_ssh.validate_binding(account, machine(private_ip="10.0.0.2"), sid)
+
+
+@pytest.mark.parametrize("metadata", [
+    {"cloud_provider": "oci", "cloud_account_id": -1},
+    {"cloud_provider": "aws"},
+    {"cloud_provider": "gcp"},
+])
+def test_legacy_tag_cannot_override_owner_metadata(account, metadata):
+    sid = saved_session(account)
+    store.execute("UPDATE ssh_sessions SET metadata=? WHERE id=?", (store.json.dumps(metadata), sid))
+    before = store.query("SELECT * FROM ssh_sessions WHERE id=?", (sid,))[0]
+    assert oci_ssh.sync_instance(account, machine())["updated"] == 0
+    assert store.query("SELECT * FROM ssh_sessions WHERE id=?", (sid,))[0] == before
+    assert not store.query("SELECT * FROM oci_ssh_links WHERE session_id=?", (sid,))
+
+
+def test_legacy_private_address_is_not_automatically_adopted(account):
+    sid = saved_session(account, host="10.0.0.2")
+    assert oci_ssh.sync_instance(account, machine(private_ip="10.0.0.2"))["updated"] == 0
+    assert not store.query("SELECT * FROM oci_ssh_links WHERE session_id=?", (sid,))
+
+
+@pytest.mark.parametrize("field,value", [("cloud_region", "us-phoenix-1"), ("cloud_instance_id", "other-instance")])
+def test_unlinked_session_keeps_region_and_instance_ownership(account, field, value):
+    sid = saved_session(account)
+    metadata = {"cloud_provider": "oci", "cloud_account_id": account["id"], field: value}
+    store.execute("UPDATE ssh_sessions SET metadata=? WHERE id=?", (store.json.dumps(metadata), sid))
+    assert oci_ssh.sync_instance(account, machine())["updated"] == 0
+    with pytest.raises(oci_service.OciError, match="其他区域或实例"):
+        oci_ssh.validate_binding(account, machine(), sid)

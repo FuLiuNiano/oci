@@ -114,7 +114,7 @@ class Client:
 
     def call(self, method, path, body=None, params=None, monitoring=False):
         base = f"https://monitoring.googleapis.com/v3/projects/{self.project}/" if monitoring else COMPUTE+self.project+"/"
-        return self._send(method, base+path, headers={"Authorization":"Bearer "+self._access_token()}, json=body, params=params)
+        return self._send(method, base+path if path else base.rstrip('/'), headers={"Authorization":"Bearer "+self._access_token()}, json=body, params=params)
 
     def pages(self, path, params=None, monitoring=False):
         query = dict(params or {})

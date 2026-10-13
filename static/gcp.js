@@ -18,8 +18,9 @@
   const query = (a, values = {}) => '?' + new URLSearchParams({revision:a.revision,...values});
   async function guarded(fn) {
     if (busy) { toast('请等待当前 GCP 请求完成', false); return; }
+    const started=generation;
     busy = true;
-    try { await fn(); } catch (error) { message(error.message); toast(error.message,false); }
+    try { await fn(); } catch (error) { if(started===generation){message(error.message); toast(error.message,false);} }
     finally { busy = false; }
   }
   function choose() {

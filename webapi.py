@@ -9,7 +9,7 @@ from typing import Optional
 
 import asyncssh
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import cloudflare_service as cf
 import email_service
@@ -668,9 +668,15 @@ def launch_task_op(task_id: int, op: str, _: None = Depends(require_auth)):
         if not store.query("SELECT id FROM launch_tasks WHERE id=?", (task_id,)):
             raise HTTPException(404, "任务不存在")
         row = store.query("SELECT * FROM launch_tasks WHERE id=?", (task_id,))[0]
-        if op in ("start", "stop") and row["status"] == "success":
+        if op in ("start", "stop", "run-now") and row["status"] == "success":
             raise HTTPException(400, "此任务已创建实例，请新建任务以创建另一台")
-        if op == "stop":
+        if op == "run-now":
+            if row['status']!='running':
+                raise HTTPException(400,'请先继续任务，再立即尝试')
+            if store.account_disabled('oci',row['account_id']):
+                raise HTTPException(409,'账号配置已停用，请启用后重试')
+            tasks._run_launch_task(row)
+        elif op == "stop":
             store.execute("UPDATE launch_tasks SET status='stopped', "
                           "updated_at=datetime('now','localtime') WHERE id=?", (task_id,))
         elif op == "start":
@@ -829,6 +835,7 @@ class SshBody(BaseModel):
     secret: str = ""
     proxy_command: str = ""
     tags: str = ""
+    region: str = Field(default="", max_length=80)
     monitor_cpu: bool = False
     monitor_mem: bool = False
     monitor_disk: bool = False
@@ -853,7 +860,7 @@ def ssh_sessions(_: None = Depends(require_auth)):
 def ssh_session_copy(session_id: int, _: None = Depends(require_auth)):
     s = _ssh_or_404(session_id)
     columns = ("host", "port", "username", "auth_type", "secret", "proxy_command",
-               "tags", "monitor_cpu", "monitor_mem", "monitor_disk", "metadata")
+               "tags", "monitor_cpu", "monitor_mem", "monitor_disk", "metadata", "region")
     sid = store.execute("INSERT INTO ssh_sessions(name," + ",".join(columns) + ") VALUES(" +
                         ",".join(["?"] * (len(columns) + 1)) + ")",
                         (s["name"] + " · 副本", *(s[c] for c in columns)))
@@ -864,10 +871,10 @@ def ssh_session_copy(session_id: int, _: None = Depends(require_auth)):
 def ssh_session_add(body: SshBody, _: None = Depends(require_auth)):
     sid = store.execute(
         "INSERT INTO ssh_sessions(name, host, port, username, auth_type, secret, proxy_command, "
-        "tags, monitor_cpu, monitor_mem, monitor_disk) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "tags, monitor_cpu, monitor_mem, monitor_disk, region) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (body.name.strip(), body.host.strip(), body.port, body.username.strip(),
          body.auth_type, body.secret, body.proxy_command.strip(), body.tags.strip(),
-         1 if body.monitor_cpu else 0, 1 if body.monitor_mem else 0, 1 if body.monitor_disk else 0))
+         1 if body.monitor_cpu else 0, 1 if body.monitor_mem else 0, 1 if body.monitor_disk else 0, body.region.strip()))
     return {"id": sid}
 
 
@@ -886,11 +893,11 @@ def ssh_session_update(session_id: int, body: SshBody, _: None = Depends(require
     secret = body.secret if body.secret and body.secret != "***" else sess["secret"]
     store.execute(
         "UPDATE ssh_sessions SET name=?, host=?, port=?, username=?, auth_type=?, secret=?, "
-        "proxy_command=?, tags=?, monitor_cpu=?, monitor_mem=?, monitor_disk=? WHERE id=?",
+        "proxy_command=?, tags=?, monitor_cpu=?, monitor_mem=?, monitor_disk=?, region=? WHERE id=?",
         (body.name.strip(), body.host.strip(), body.port, body.username.strip(),
          body.auth_type, secret, body.proxy_command.strip(), body.tags.strip(),
          1 if body.monitor_cpu else 0, 1 if body.monitor_mem else 0,
-         1 if body.monitor_disk else 0, session_id))
+         1 if body.monitor_disk else 0, body.region.strip(), session_id))
     changed = dict(host=body.host.strip(), port=body.port, username=body.username.strip(),
                    auth_type=body.auth_type, secret=secret, proxy_command=body.proxy_command.strip())
     if any((sess.get(field) or "") != (value or "") for field, value in changed.items()):

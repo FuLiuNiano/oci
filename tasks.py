@@ -58,6 +58,11 @@ def _loop():
             _tick_auto_restart()
         except Exception:
             traceback.print_exc()
+        try:
+            import cloud_automation
+            cloud_automation.tick(now)
+        except Exception:
+            traceback.print_exc()
         if now - _state["last_traffic"] >= TRAFFIC_EVERY_SECONDS:
             _state["last_traffic"] = now
             try:
@@ -99,6 +104,8 @@ def _run_launch_task(task):
         )
         return
     acct = rows[0]
+    if store.account_disabled('oci',acct['id']):
+        return
     if acct["platform"] != "oci":
         store.execute(
             "UPDATE launch_tasks SET status='failed', last_error='抢机仅支持 OCI 账号', "

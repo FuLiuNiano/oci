@@ -50,6 +50,8 @@ def get_account(aid, expected=None):
     rows = store.query('SELECT * FROM gcp_accounts WHERE id=?', (aid,))
     if not rows: raise HTTPException(404, 'GCP 账号不存在')
     account = rows[0]
+    if store.account_disabled('gcp', aid):
+        raise HTTPException(409,'该 GCP 配置已停用，请先启用')
     if expected is not None and not hmac.compare_digest(expected, revision(account)):
         raise HTTPException(409, 'GCP 凭据或线路已改变，请刷新账号后重试')
     return account

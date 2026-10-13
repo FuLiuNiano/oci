@@ -121,6 +121,8 @@ let curView = "overview";
 function switchView(name) {
   curView = name;
   $$("nav button").forEach(b => b.classList.toggle("active", b.dataset.view === name));
+  const group = $(`#cloud-nav button[data-view="${name}"]`)?.closest('details');
+  if (group) group.open = true;
   $$(".view").forEach(v => v.classList.toggle("hide", v.id !== "view-" + name));
   const fn = VIEW_LOADERS[name];
   if (fn) Promise.resolve(fn()).catch(e => toast(e.message, false));

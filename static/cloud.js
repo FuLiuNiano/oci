@@ -307,7 +307,7 @@
           <td><span class="badge ${cls}">${st}</span></td><td>${t.attempts}</td>
           <td class="err-cell" title="${esc(t.last_error)}">${esc((t.last_error || "").slice(0, 60)) || "-"}</td>
           <td class="ops">${t.status === "running"
-            ? `<button data-op="stop" data-id="${t.id}">暂停</button>`
+            ? `<button data-op="run-now" data-id="${t.id}">立即尝试</button><button data-op="stop" data-id="${t.id}">暂停</button>`
             : t.status === "success" ? "" : `<button data-op="start" data-id="${t.id}">继续</button>`}
           <button data-op="delete" class="danger" data-id="${t.id}">删除</button></td></tr>`;
       }).join("") || `<tr><td colspan="7" class="muted">还没有任务</td></tr>`;
@@ -316,8 +316,11 @@
   $("#task-table tbody").addEventListener("click", async (e) => {
     const btn = e.target.closest("button[data-op]");
     if (!btn) return;
+    if(btn.dataset.op==='run-now'&&!confirm('立即向此任务所属账号提交一次开机请求？创建可能产生费用；任务仍按原规则处理重试。'))return;
+    btn.disabled=true;
     try { await api(`/api/launch-tasks/${btn.dataset.id}/${btn.dataset.op}`, { method: "POST" }); loadTasks(true); }
     catch (err) { toast(err.message, false); }
+    finally {btn.disabled=false;}
   });
 
   $("#btn-a1").addEventListener("click", async () => {

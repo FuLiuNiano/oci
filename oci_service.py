@@ -45,6 +45,8 @@ def compartment_of(acct):
 
 
 def _client(cls, acct):
+    if acct.get("id") and store.account_disabled('oci', acct['id']):
+        raise OciError("该 OCI 配置已在本地停用，请启用后重试")
     client = cls(build_config(acct))
     proxy = store.account_params(acct).get("proxy_url", "")
     try:
@@ -996,8 +998,8 @@ def list_users(acct):
         "id": u.id, "name": u.name, "email": u.email or "",
         "mfa": bool(u.is_mfa_activated),
         "desc": u.description or "",
-    } for u in _client(oci.identity.IdentityClient, acct).list_users(
-        compartment_id=acct["params"].get("tenancy_ocid", "")).data]
+    } for u in _all(_client(oci.identity.IdentityClient, acct).list_users,
+                   compartment_id=acct["params"].get("tenancy_ocid", ""))]
 
 
 def create_user(acct, name, email, description=""):

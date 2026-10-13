@@ -20,11 +20,16 @@ def _check_binding(acct, instance, session_id):
     rows = store.query("SELECT * FROM ssh_sessions WHERE id=?", (session_id,))
     if not rows:
         raise OciError("所选 SSH 会话不存在")
-    if metadata_of(rows[0]).get("source") in ("gcp", "aws"):
+    if (metadata_of(rows[0]).get("source") in ("gcp", "aws") or
+            metadata_of(rows[0]).get("cloud_provider") not in (None, "oci")):
         raise OciError("所选 SSH 会话属于其他云平台，已阻止覆盖")
     metadata = metadata_of(rows[0])
     if metadata.get("cloud_provider") == "oci" and metadata.get("cloud_account_id") != acct["id"]:
         raise OciError("所选 SSH 会话记录属于其他账号，已阻止覆盖")
+    if metadata.get("cloud_provider") == "oci" and (
+            metadata.get("cloud_region", acct.get("region") or "") != (acct.get("region") or "") or
+            metadata.get("cloud_instance_id", instance["id"]) != instance["id"]):
+        raise OciError("所选 SSH 会话记录属于其他区域或实例，已阻止覆盖")
     for table in ("gcp_ssh_links", "aws_ssh_links"):
         if store.query("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)):
             if store.query(f"SELECT session_id FROM {table} WHERE session_id=?", (session_id,)):
@@ -75,10 +80,14 @@ def sync_instance(acct, instance, create=False, username="root", proxy_command="
             candidates = store.query("SELECT s.* FROM ssh_sessions s WHERE s.tags=? AND s.host IN (" +
                                      ",".join("?" * len(hosts)) + ") AND NOT EXISTS "
                                      "(SELECT 1 FROM oci_ssh_links l WHERE l.session_id=s.id)", (tag, *hosts))
-            candidates = [s for s in candidates if metadata_of(s).get("cloud_provider") in (None, "oci")
-                          and metadata_of(s).get("source") not in ("gcp", "aws")]
-            if len(candidates) == 1:
-                linked = candidates
+            eligible = []
+            for candidate in candidates:
+                try:
+                    eligible.append(_check_binding(acct, instance, candidate["id"]))
+                except OciError:
+                    continue
+            if len(eligible) == 1:
+                linked = eligible
         created = False
         if not linked:
             if not create or not hosts:

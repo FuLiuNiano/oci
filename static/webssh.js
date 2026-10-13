@@ -258,6 +258,23 @@
     if (e.key === "Escape") setFullscreen(false);
   });
   $("#session-search").addEventListener("input", renderSessionCards);
+  let selectedRegion = '';
+  const regionFilters=document.createElement('div');
+  regionFilters.id='ssh-region-filters'; regionFilters.className='region-filters';
+  $('#ssh-session-list').before(regionFilters);
+  function sessionRegion(s) {
+    const m=s.metadata || {};
+    const region=s.oci_region || m.cloud_region || m.region || (m.zone ? m.zone.replace(/-[a-z]$/, '') : '') || s.region;
+    if (region) return region;
+    // Old imported sessions have only account tags; use them as a display group, never as a connection identity.
+    const label=(s.tags || '').split(',').find(t => /^oci:|^aws:|^gcp:/.test(t));
+    return label ? label.replace(/^[^:]+:/,'') : '未分组';
+  }
+  regionFilters.addEventListener('click', e => {
+    const button=e.target.closest('[data-ssh-region]');
+    if (!button) return;
+    selectedRegion=button.dataset.sshRegion; renderSessionCards();
+  });
 
   async function loadSessions() {
     try {
@@ -274,7 +291,7 @@
     await loadSessions();
     const sess = identity ? state.sessions.find(s => s.oci_account_id === identity.accountId &&
       s.oci_instance_id === identity.instanceId && s.oci_region === identity.region) : state.sessions.find(s => s.host === host);
-    if (sess) openTerminal(sess.id);
+    if (sess) { selectedRegion=''; renderSessionCards(); openTerminal(sess.id); }
     else {
       $("#session-search").value = host;
       renderSessionCards();
@@ -294,7 +311,11 @@
 
   function renderSessionCards() {
     const query = $("#session-search").value.trim().toLowerCase();
-    const sessions = state.sessions.filter(s => `${s.name} ${s.host} ${s.username} ${s.tags} ${(s.metadata?.ipv6_addresses || []).join(' ')}`.toLowerCase().includes(query));
+    const counts=new Map(); state.sessions.forEach(s => counts.set(sessionRegion(s), (counts.get(sessionRegion(s)) || 0)+1));
+    if (selectedRegion && !counts.has(selectedRegion)) selectedRegion='';
+    regionFilters.innerHTML=[['',state.sessions.length],...Array.from(counts).sort((a,b)=>a[0].localeCompare(b[0]))].map(([region,count]) =>
+      `<button class="ghost tiny" data-ssh-region="${esc(region)}" aria-pressed="${region===selectedRegion}">${esc(region || '全部地区')} (${count})</button>`).join('');
+    const sessions = state.sessions.filter(s => (!selectedRegion || sessionRegion(s)===selectedRegion) && `${s.name} ${s.host} ${s.username} ${s.tags} ${sessionRegion(s)} ${(s.metadata?.ipv6_addresses || []).join(' ')}`.toLowerCase().includes(query));
     $("#session-count").textContent = state.sessions.length;
     $("#ssh-session-list").innerHTML = sessions.map(s => {
       const m = s.metadata || {};
@@ -310,7 +331,7 @@
         <div class="session-footer"><span class="connection-status ${status === "已连接" || status === "检测成功" ? "online" : ""}"><i></i>${esc(status)}</span><div>
           ${action("data-sopen", "打开终端", "play")}${action("data-scopy", "复制会话", "copy")}${action("data-sedit", "编辑会话", "edit")}${action("data-sdel", "删除会话", "trash", true)}
         </div></div>
-        <details class="session-more"><summary>文件与连接工具</summary><div class="bar">${action("data-ssftp", "打开 SFTP", "folder")}${action("data-stest", "测试连接", "check")}<button class="ghost tiny" data-skey="${s.id}">重置信任</button></div></details>
+        <details class="session-more"><summary>文件与连接工具</summary><div class="bar">${action("data-ssftp", "打开 SFTP", "folder")}${action("data-stest", "测试连接", "check")}<button class="ghost tiny" data-skey="${s.id}">重置信任</button><button class="ghost tiny" data-smaintenance="load" data-sid="${s.id}">查看负载</button><button class="ghost tiny" data-smaintenance="memory-start" data-sid="${s.id}">临时内存占用</button><button class="ghost tiny" data-smaintenance="memory-stop" data-sid="${s.id}">停止内存占用</button><button class="ghost tiny" data-smaintenance="clear-cache" data-sid="${s.id}">释放系统缓存</button></div></details>
       </article>`;
     }).join("") || `<div class="empty-state card">${query ? "没有匹配的会话，试试其他关键词。" : "还没有保存会话。添加一台服务器，或从 OCI 实例同步。"}</div>`;
   }
@@ -318,6 +339,23 @@
   window.sshViewLoaded = function () { renderSessionCards(); loadSessions(); };
 
   $("#ssh-session-list").addEventListener("click", async (e) => {
+    const maintenance=e.target.closest('[data-smaintenance]');
+    if(maintenance){
+      const sid=Number(maintenance.dataset.sid),operation=maintenance.dataset.smaintenance;
+      const session=state.sessions.find(s=>s.id===sid);if(!session)return;
+      const revision=session.connection_revision;
+      if(operation!=='load'&&!confirm(`${session.name} · ${session.proxy_command?'代理':'直连'}：${operation==='memory-start'?'启动最多 25% 内存、上限 256MB、15 分钟自动释放的临时任务':operation==='memory-stop'?'停止本面板的临时内存任务':'释放 Linux 系统缓存（不删除文件，需要 root）'}？`))return;
+      maintenance.disabled=true;
+      try {
+        const result=await api(`/api/tools/ssh/${sid}/maintenance`,{method:'POST',body:{operation,expected_revision:revision,confirm:true}});
+        if(state.sessions.find(s=>s.id===sid)?.connection_revision!==revision)return;
+        const box=document.createElement('div');box.className='card';
+        const heading=document.createElement('h4');heading.textContent=`${session.name} · ${result.route} · 维护结果`;
+        const output=document.createElement('pre');output.className='logbox';output.textContent=result.output;
+        box.append(heading,output);maintenance.closest('article').append(box);
+      } catch(error){toast(error.message,false);}finally{maintenance.disabled=false;}
+      return;
+    }
     const ipv6Copy = e.target.closest('[data-sipv6copy]');
     if (ipv6Copy) {
       try { await navigator.clipboard.writeText(`[${ipv6Copy.dataset.sipv6copy}]:${ipv6Copy.dataset.port}`); toast('IPv6 SSH 地址已复制'); }
@@ -379,6 +417,7 @@
     $("#ss-secret").value = "";
     $("#ss-proxy").value = s ? s.proxy_command : "";
     $("#ss-tags").value = s ? s.tags : "";
+    $("#ss-region").value = s?.region || '';
     $("#ss-mcpu").checked = !!(s && s.monitor_cpu);
     $("#ss-mmem").checked = !!(s && s.monitor_mem);
     $("#ss-mdisk").checked = !!(s && s.monitor_disk);
@@ -391,6 +430,7 @@
       port: Number($("#ss-port").value) || 22, username: $("#ss-user").value.trim() || "root",
       auth_type: $("#ss-authtype").value, secret: $("#ss-secret").value,
       proxy_command: $("#ss-proxy").value.trim(), tags: $("#ss-tags").value.trim(),
+      region:$('#ss-region').value.trim(),
       monitor_cpu: $("#ss-mcpu").checked, monitor_mem: $("#ss-mmem").checked,
       monitor_disk: $("#ss-mdisk").checked,
     };

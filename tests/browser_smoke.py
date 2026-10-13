@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from playwright.sync_api import sync_playwright
 from browser_oci_isolation import check_oci_account_switching
+from browser_cloud_tools import check_cloud_tools
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -176,6 +177,12 @@ server.run()
                     page.locator("#account-form").wait_for(state="hidden")
                     page.wait_for_function("document.querySelector('#acct-table').textContent.includes('edited-browser-account')")
                     check_oci_account_switching(page)
+                    check_cloud_tools(page)
+                    page.evaluate("switchView('oci-tools')")
+                    page.wait_for_function("document.querySelector('#view-oci-tools [data-account]').value !== ''")
+                    tools_preview = Path(os.environ.get('OCI_UI_PREVIEW_DIR', tempfile.gettempdir()))
+                    tools_preview.mkdir(parents=True, exist_ok=True)
+                    page.screenshot(path=str(tools_preview / 'cloud-tools.png'), full_page=True)
                     page.click('nav button[data-view="instances"]')
                     page.locator('#inst-cards button[data-act="REBOOT"]').wait_for()
                     assert "50 GB" in page.locator("#inst-cards").inner_text()
