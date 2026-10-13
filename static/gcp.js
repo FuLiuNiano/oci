@@ -32,7 +32,10 @@
     el('instances').replaceChildren(); el('summary').replaceChildren();
     for (const name of ['create-form','sync-form','traffic-panel','account-form']) hide(name);
     options = null;
-    message(a ? '点击刷新实例 / 测试连接，读取当前项目。' : '请添加 GCP 账号。');
+    if (a) {
+      const target=capture();
+      refresh(target).catch(error => { if (valid(target)) message(error.message); });
+    } else message('请添加账号。');
   }
   async function loadAccounts(preferred = selected) {
     accounts = await api('/api/gcp/accounts');

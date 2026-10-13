@@ -48,9 +48,52 @@ def check_cloud_tools(page):
         document.querySelector('[data-ssh-region="美西凤凰城"]').click();
         assert(document.querySelector('#ssh-session-list').textContent.includes('Phoenix proxy')&&!document.querySelector('#ssh-session-list').textContent.includes('Tokyo direct'),'second region did not filter SSH cards');
         assert(state.sessions[0].host==='203.0.113.1'&&state.sessions[1].proxy_command==='socks5h://proxy:1080','filter changed SSH transport');
+        state.sessions=[
+          {id:11,name:'Legacy Tokyo',host:'203.0.113.11',tags:'oci:东京',metadata:{},proxy_command:''},
+          {id:12,name:'Linked Tokyo',host:'203.0.113.12',oci_region:'ap-tokyo-1',metadata:{cloud_provider:'oci',cloud_account_id:2},proxy_command:'socks5h://proxy:1080'}
+        ];
+        document.querySelector('#session-search').dispatchEvent(new Event('input'));
+        const tokyo=document.querySelector('[data-ssh-region="ap-tokyo-1"]');
+        assert(tokyo && tokyo.textContent.includes('(2)'),'legacy and linked Tokyo not grouped together');
+        assert(!document.querySelector('[data-ssh-region="东京"]'),'duplicate Tokyo group');
+        tokyo.click();
+        assert(document.querySelector('#ssh-session-list').textContent.includes('Legacy Tokyo')&&document.querySelector('#ssh-session-list').textContent.includes('Linked Tokyo'),'merged group missing sessions');
+        assert(state.sessions[1].metadata.cloud_account_id===2&&state.sessions[1].proxy_command==='socks5h://proxy:1080','region normalization mutated account or route');
       } finally {
         api=original;window.confirm=originalConfirm;state.sessions=originalSessions;
         switchView('ssh');document.querySelector('#session-search').value='';document.querySelector('#session-search').dispatchEvent(new Event('input'));
         await window.loadSessions();
+      }
+    }""")
+
+    page.evaluate("""async () => {
+      const original=api,select=document.querySelector('#dashboard-account');
+      const html=select.innerHTML,value=select.value,requests=[];
+      const tick=()=>new Promise(r=>setTimeout(r,0));
+      let release;
+      const old=new Promise(r=>release=r);
+      try {
+        api=async path=>{
+          requests.push(path);
+          if(path==='/api/accounts/901/usage')return old;
+          if(path.endsWith('/usage'))return {currencies:{USD:222}};
+          if(path.endsWith('/traffic'))return {total_gb:2,per_resource:{}};
+          if(path.endsWith('/regions'))return {data:[]};
+          if(path.endsWith('/stats'))return {limits:[]};
+          return {};
+        };
+        select.innerHTML='<option value="901">A</option><option value="902">B</option>';
+        select.value='901';select.dispatchEvent(new Event('change'));await tick();
+        select.value='902';select.dispatchEvent(new Event('change'));await tick();
+        for(const kind of ['usage','traffic','regions','stats']) {
+          if(!requests.includes('/api/accounts/902/'+kind))throw new Error('account switch did not auto-load '+kind);
+        }
+        release({currencies:{USD:111}});await tick();
+        const box=document.querySelector('#summary-usage').textContent;
+        if(!box.includes('222.00')||box.includes('111.00'))throw new Error('stale dashboard account response displayed');
+        if(document.querySelector('[data-cloud-metric="usage"]').disabled)throw new Error('new account button stuck disabled');
+      } finally {
+        api=original;select.innerHTML=html;select.value=value;
+        select.dispatchEvent(new Event('change'));await tick();
       }
     }""")

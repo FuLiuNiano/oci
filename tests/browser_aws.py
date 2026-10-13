@@ -81,13 +81,14 @@ server.run()
                     assert 'proxy-secret' not in page.locator('#view-aws').inner_text()
                     assert 'AWS' not in page.locator('#inst-account').inner_text()
                     page.click('#aws-test'); page.wait_for_function("document.querySelector('#aws-message').textContent.includes('认证成功')")
-                    page.click('#aws-refresh'); page.locator('.aws-instance').wait_for()
+                    page.locator('.aws-instance').wait_for()
                     assert 'AWS proxy' in page.locator('.aws-instance').inner_text()
                     page.click('#aws-edit'); assert page.input_value('#aws-access')==page.input_value('#aws-secret')==page.input_value('#aws-proxy')==''
                     page.fill('#aws-name','AWS proxy edited'); page.click('#aws-account-form button[type="submit"]'); page.locator('#aws-account-form').wait_for(state='hidden')
                     assert '代理' in page.locator('#aws-route').inner_text()
                     page.select_option('#aws-account',label='AWS direct · ap-northeast-1')
-                    assert page.locator('#aws-instances').inner_text()=='' and page.locator('#aws-route').inner_text()=='直连'
+                    page.wait_for_function("document.querySelector('#aws-instances').textContent.includes('AWS direct')")
+                    assert page.locator('#aws-route').inner_text()=='直连'
                     page.click('#aws-open-create'); page.locator('#aws-create-form').wait_for(state='visible')
                     assert page.input_value('#aws-bundle')=='nano' and page.locator('#aws-bundle option').count()==1
                     page.select_option('#aws-ip-type','ipv6'); assert page.input_value('#aws-bundle')=='nano_ipv6'
@@ -112,11 +113,13 @@ server.run()
                       api=(path,opts)=>path.includes('/aws/accounts/') && path.includes('/instances?') ? new Promise(resolve=>window.awsLateReply=resolve) : window.awsOriginalApi(path,opts);
                     }""")
                     page.click('#aws-refresh'); page.wait_for_function('!!window.awsLateReply')
+                    page.evaluate('() => { api=window.awsOriginalApi; }')
                     page.select_option('#aws-account',label='AWS proxy edited · ap-northeast-1')
                     page.evaluate("""() => { window.awsLateReply({instances:[{name:'wrong-account'}],overview:{total:1,running:1}}); api=window.awsOriginalApi; }""")
                     page.wait_for_timeout(150)
-                    assert page.locator('#aws-instances').inner_text()==''
-                    page.click('#aws-refresh'); page.locator('.aws-instance').wait_for()
+                    page.locator('.aws-instance').wait_for()
+                    assert 'wrong-account' not in page.locator('#aws-instances').inner_text()
+                    assert 'AWS proxy edited' in page.locator('#aws-instances').inner_text()
                     page.screenshot(path=str(Path(tempfile.gettempdir())/'oci-aws-preview.png'),full_page=True)
                     page.set_viewport_size({'width':390,'height':844})
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 2')

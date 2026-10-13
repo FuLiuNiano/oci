@@ -39,8 +39,10 @@
 
   /* ================= 实例 ================= */
 
+  let instanceRequest = 0;
   window.loadInstances = async function (silent = false) {
-    const valid = accountGuard('#inst-account');
+    const request = ++instanceRequest, accountValid = accountGuard('#inst-account');
+    const valid = () => request === instanceRequest && accountValid();
     if (!state.instAccount) return;
     if (!silent) $("#inst-summary").textContent = "加载中…";
     try {
@@ -54,16 +56,16 @@
       const bootRequest = cachedBoot && Date.now() - cachedBoot.at < 120000
         ? Promise.resolve({data: cachedBoot.data})
         : api(`/api/oci/boot-volumes?account_id=${acct.id}`)
-            .then(result => { bootCache.set(acct.id, {data: result.data, at: Date.now()}); return result; })
+            .then(result => { if (valid()) bootCache.set(acct.id, {data: result.data, at: Date.now()}); return result; })
             .catch(() => ({data: cachedBoot?.data || []}));
-      const [r, boot] = await Promise.all([
-        api(url), bootRequest,
-      ]);
+      const r = await api(url);
       if (!valid() || instAccount() !== acct.id) return;
-      renderInstances(platform, acct, r.data, boot.data);
-      if (!silent) $("#inst-summary").textContent = "";
+      renderInstances(platform, acct, r.data, cachedBoot?.data || []);
+      $("#inst-summary").textContent = "";
+      const boot = await bootRequest;
+      if (valid() && instAccount() === acct.id) renderInstances(platform, acct, r.data, boot.data);
     } catch (e) {
-      if (!silent) { $("#inst-summary").textContent = ""; toast(e.message, false); }
+      if (valid() && !silent) { $("#inst-summary").textContent = e.message; toast(e.message, false); }
     }
   };
 

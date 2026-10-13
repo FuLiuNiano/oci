@@ -264,11 +264,13 @@
   $('#ssh-session-list').before(regionFilters);
   function sessionRegion(s) {
     const m=s.metadata || {};
-    const region=s.oci_region || m.cloud_region || m.region || (m.zone ? m.zone.replace(/-[a-z]$/, '') : '') || s.region;
-    if (region) return region;
-    // Old imported sessions have only account tags; use them as a display group, never as a connection identity.
-    const label=(s.tags || '').split(',').find(t => /^oci:|^aws:|^gcp:/.test(t));
-    return label ? label.replace(/^[^:]+:/,'') : '未分组';
+    const tag=(s.tags || '').split(',').map(t => t.trim()).find(t => /^(oci|aws|gcp):/.test(t)) || '';
+    const region=s.oci_region || m.cloud_region || m.region || (m.zone ? m.zone.replace(/-[a-z]$/, '') : '') || s.region || tag.replace(/^[^:]+:/,'');
+    // Normalize display labels only; never infer account ownership or change routes.
+    const provider=m.cloud_provider || m.source || tag.split(':')[0];
+    const aliases={'东京':'ap-tokyo-1','日本东京':'ap-tokyo-1','大阪':'ap-osaka-1','日本大阪':'ap-osaka-1',
+      '凤凰城':'us-phoenix-1','美西凤凰城':'us-phoenix-1','首尔':'ap-seoul-1','春川':'ap-chuncheon-1','新加坡':'ap-singapore-1'};
+    return (provider==='oci' ? aliases[region] : '') || region || '未分组';
   }
   regionFilters.addEventListener('click', e => {
     const button=e.target.closest('[data-ssh-region]');

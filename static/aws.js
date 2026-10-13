@@ -35,7 +35,10 @@
     for (const name of ['create-form','sync-form','metrics-panel','snapshots-panel','ips-panel','account-form']) hide(name);
     el('account-form').reset(); editing = null; options = null; instances = []; metricsInstance = '';
     for (const name of ['metrics-rows','snapshot-rows','ip-rows']) el(name).replaceChildren();
-    message(a ? '点击刷新实例，读取当前账号和区域的 Lightsail。' : '请添加 AWS 账号。');
+    if (a) {
+      const target=capture();
+      refresh(target).catch(error => { if (valid(target)) message(error.message); });
+    } else message('请添加账号。');
   }
   async function loadAccounts(preferred = selected) {
     const result = await Promise.all([api('/api/aws/accounts'),api('/api/aws/regions')]);

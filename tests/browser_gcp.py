@@ -82,14 +82,15 @@ server.run()
                     assert '代理' in page.locator('#gcp-route').inner_text()
                     assert 'secret' not in page.locator('#view-gcp').inner_text()
                     assert page.locator('#inst-account option').count()==0 or 'GCP' not in page.locator('#inst-account').inner_text()
-                    page.click('#gcp-refresh'); page.locator('.gcp-instance').wait_for()
+                    page.locator('.gcp-instance').wait_for()
                     assert 'GCP proxy' in page.locator('.gcp-instance').inner_text()
                     page.click('#gcp-edit'); assert page.input_value('#gcp-json')=='' and page.input_value('#gcp-proxy')==''
                     page.fill('#gcp-name','GCP proxy edited'); page.click('#gcp-account-form button[type="submit"]')
                     page.locator('#gcp-account-form').wait_for(state='hidden')
                     assert '代理' in page.locator('#gcp-route').inner_text()
                     page.select_option('#gcp-account',label='GCP direct · first-project')
-                    assert page.locator('#gcp-instances').inner_text()=='' and page.locator('#gcp-route').inner_text()=='直连'
+                    page.wait_for_function("document.querySelector('#gcp-instances').textContent.includes('GCP direct')")
+                    assert page.locator('#gcp-route').inner_text()=='直连'
                     page.click('#gcp-open-create'); page.locator('#gcp-create-form').wait_for(state='visible')
                     assert page.input_value('#gcp-machine')=='e2-micro'
                     page.select_option('#gcp-zone','us-east1-b')

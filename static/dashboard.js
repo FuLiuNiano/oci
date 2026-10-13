@@ -42,7 +42,7 @@
   const sections = ["usage", "traffic", "regions", "stats"];
   function resetCards() {
     requestGeneration++;
-    sections.forEach(k => $("#summary-" + k).textContent = "点击读取实时云数据");
+    sections.forEach(k => { $("#summary-" + k).textContent = "等待查询云端数据…"; $(`[data-cloud-metric="${k}"]`).disabled = false; });
   }
   window.syncDashboardAccounts = function () {
     resetDiagnostics(); resetMonitor();
@@ -51,10 +51,12 @@
       el.innerHTML = state.accounts.map(a => `<option value="${a.id}">${esc(a.name)} · ${esc(a.region)}</option>`).join("") || '<option value="">先添加 OCI 账号</option>';
       if (state.accounts.some(a => String(a.id) === prev)) el.value = prev;
     }
-    if (chosenAccount !== $("#dashboard-account").value) { chosenAccount = $("#dashboard-account").value; resetCards(); }
+    chosenAccount = $("#dashboard-account").value;
+    resetCards();
+    if (curView === "overview") readAllCards();
     $("#overview-profiles").innerHTML = state.accounts.length ? state.accounts.map(a => `<div class="profile-row"><span class="profile-avatar">${uiIcon("globe")}</span><div><b>${esc(a.name)}</b><small>${esc(a.region)}</small></div><span class="profile-status" data-profile-status="${a.id}">未检测</span><button class="ghost" data-profile-check="${a.id}">测活</button></div>`).join("") : '<div class="empty-state">还没有云账号。到「云账号」添加 OCI 配置，开始管理资源。</div>';
   };
-  $("#dashboard-account").addEventListener("change", () => { chosenAccount = $("#dashboard-account").value; resetCards(); });
+  $("#dashboard-account").addEventListener("change", () => { chosenAccount = $("#dashboard-account").value; resetCards(); readAllCards(); });
 
   async function readCard(kind) {
     const account = $("#dashboard-account").value;
@@ -78,10 +80,15 @@
         box.innerHTML = `<strong>${r.limits.length}<small>项配额</small></strong><div class="summary-details">${r.limits.map(x => `<p><b>${esc(x.name)}</b>${esc(x.used ?? "未知")} / ${esc(x.limit ?? "未知")}${x.ad ? " · " + esc(x.ad) : ""}</p>`).join("") || esc(r.cost_note || "没有匹配的配额")}</div>`;
       }
     } catch (e) { if (generation === requestGeneration) box.innerHTML = `<span class="query-error">${esc(e.message)}</span>`; }
-    finally { button.disabled = false; }
+    finally { if (generation === requestGeneration) button.disabled = false; }
   }
+  function readAllCards() {
+    if ($('#dashboard-account').value) return Promise.all(sections.map(readCard));
+  }
+  const originalOverviewLoader = VIEW_LOADERS.overview;
+  VIEW_LOADERS.overview = () => { readAllCards(); return originalOverviewLoader(); };
   $$('[data-cloud-metric]').forEach(b => b.addEventListener("click", () => readCard(b.dataset.cloudMetric)));
-  $("#btn-refresh-overview").addEventListener("click", loadOverview);
+  $("#btn-refresh-overview").addEventListener("click", () => { readAllCards(); loadOverview(); });
   async function checkProfile(id) {
     const status = $(`[data-profile-status="${id}"]`);
     if (status) status.textContent = "检测中…";

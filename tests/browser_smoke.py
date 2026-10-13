@@ -198,7 +198,6 @@ server.run()
                         assert page.locator(f"#view-{name}").is_visible()
                     page.click('nav button[data-view="overview"]')
                     for kind in ("usage", "traffic", "regions", "stats"):
-                        page.click(f'[data-cloud-metric="{kind}"]')
                         page.wait_for_function("k => !document.querySelector('[data-cloud-metric=\"'+k+'\"]').disabled", arg=kind)
                     page.locator('#host-cpu').filter(has_text="11%").wait_for()
                     page.wait_for_function("!document.querySelector('#toast').classList.contains('show')")
