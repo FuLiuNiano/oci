@@ -40,7 +40,7 @@
   /* ================= 实例 ================= */
 
   let instanceRequest = 0;
-  window.loadInstances = async function (silent = false) {
+  window.loadInstances = async function (silent = false, force = true) {
     const epoch=cloudSnapshots.epoch;
     const request = ++instanceRequest, accountValid = accountGuard('#inst-account');
     const valid = () => request === instanceRequest && accountValid() && epoch===cloudSnapshots.epoch;
@@ -54,7 +54,8 @@
       if(snapshot) {
         renderInstances(platform,acct,snapshot.data.instances,snapshot.data.boot);
         $$('#inst-cards button').forEach(button => button.disabled=true);
-        $('#inst-summary').textContent=cloudSnapshots.label(snapshot);
+        $('#inst-summary').textContent=cloudSnapshots.label(snapshot,force);
+        if(!force) return;
       }
       const url = platform === "oci"
         ? `/api/cloud/oci/instances?account_id=${acct.id}`
@@ -244,7 +245,7 @@
   window.showLogModal = showLogModal;
 
   $("#btn-refresh-inst").addEventListener("click", () => loadInstances());
-  $("#inst-account").addEventListener("change", e => { state.instAccount = e.target.value; loadInstances(); });
+  $("#inst-account").addEventListener("change", e => { state.instAccount = e.target.value; loadInstances(false,false); });
 
   /* ================= 开机抢机 ================= */
 

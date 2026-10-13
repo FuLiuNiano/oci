@@ -34,7 +34,7 @@
     options = null;
     if (a) {
       const target=capture();
-      refresh(target).catch(error => { if (valid(target)) message(error.message); });
+      refresh(target,false).catch(error => { if (valid(target)) message(error.message); });
     } else message('请添加账号。');
   }
   async function loadAccounts(preferred = selected) {
@@ -82,10 +82,10 @@
     if (!confirm(`移除 GCP 账号“${a.name}”？云端实例和已有 SSH 会话会保留。`)) return;
     await api(`/api/gcp/accounts/${a.id}` + query(a), {method:'DELETE'}); await loadAccounts();
   });
-  async function refresh(a) {
+  async function refresh(a,force=true) {
     const epoch=cloudSnapshots.epoch;
     const cached=cloudSnapshots.read('gcp',a,'instances');
-    if (cached && valid(a)) { renderSnapshot(a,cached.data,true); message(cloudSnapshots.label(cached)); }
+    if (cached && valid(a)) { renderSnapshot(a,cached.data,true); message(cloudSnapshots.label(cached,force)); if(!force) return; }
     else message(`正在通过${a.route}读取 ${a.name}…`);
     try {
       const data = await api(path(a,'instances') + query(a));

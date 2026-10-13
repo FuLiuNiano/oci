@@ -37,7 +37,7 @@
     for (const name of ['metrics-rows','snapshot-rows','ip-rows']) el(name).replaceChildren();
     if (a) {
       const target=capture();
-      refresh(target).catch(error => { if (valid(target)) message(error.message); });
+      refresh(target,false).catch(error => { if (valid(target)) message(error.message); });
     } else message('请添加账号。');
   }
   async function loadAccounts(preferred = selected) {
@@ -85,10 +85,10 @@
     const identity = await api(path(a,'identity') + query(a));
     if (valid(a)) message(`认证成功 · AWS 账号 ${identity.account_id} · ${identity.arn} · ${a.route}。仍需具备 Lightsail 权限。`);
   });
-  async function refresh(a) {
+  async function refresh(a,force=true) {
     const epoch=cloudSnapshots.epoch;
     const cached=cloudSnapshots.read('aws',a,'instances');
-    if (cached && valid(a)) { renderSnapshot(a,cached.data,true); message(cloudSnapshots.label(cached)); }
+    if (cached && valid(a)) { renderSnapshot(a,cached.data,true); message(cloudSnapshots.label(cached,force)); if(!force) return; }
     else message(`正在通过${a.route}读取 ${a.name}…`);
     try {
       const data = await api(path(a,'instances') + query(a));

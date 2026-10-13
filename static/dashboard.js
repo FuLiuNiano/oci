@@ -58,7 +58,7 @@
   };
   $("#dashboard-account").addEventListener("change", () => { chosenAccount = $("#dashboard-account").value; resetCards(); readAllCards(); });
 
-  async function readCard(kind) {
+  async function readCard(kind,force=false) {
     const account = $("#dashboard-account").value;
     if (!account) { toast("请先添加 OCI 账号", false); return; }
     const generation = requestGeneration, epoch=cloudSnapshots.epoch;
@@ -67,7 +67,7 @@
     const box = $("#summary-" + kind), button = $(`[data-cloud-metric="${kind}"]`);
     if (button.disabled) return;
     button.disabled = true;
-    if(cached) { renderCard(kind,cached.data,box); box.insertAdjacentHTML('beforeend','<p class="muted">'+esc(cloudSnapshots.label(cached))+'</p>'); }
+    if(cached) { renderCard(kind,cached.data,box); box.insertAdjacentHTML('beforeend','<p class="muted">'+esc(cloudSnapshots.label(cached,force))+'</p>'); if(!force) { button.disabled=false; return; } }
     else box.innerHTML = '<span class="loading-state">正在查询云端…</span>';
     try {
       const r = await api(`/api/accounts/${account}/${kind}`);
@@ -93,13 +93,13 @@
         box.innerHTML = `<strong>${r.limits.length}<small>项配额</small></strong><div class="summary-details">${r.limits.map(x => `<p><b>${esc(x.name)}</b>${esc(x.used ?? "未知")} / ${esc(x.limit ?? "未知")}${x.ad ? " · " + esc(x.ad) : ""}</p>`).join("") || esc(r.cost_note || "没有匹配的配额")}</div>`;
       }
   }
-  function readAllCards() {
-    if ($('#dashboard-account').value) return Promise.all(sections.map(readCard));
+  function readAllCards(force=false) {
+    if ($('#dashboard-account').value) return Promise.all(sections.map(kind=>readCard(kind,force)));
   }
   const originalOverviewLoader = VIEW_LOADERS.overview;
   VIEW_LOADERS.overview = () => { readAllCards(); return originalOverviewLoader(); };
-  $$('[data-cloud-metric]').forEach(b => b.addEventListener("click", () => readCard(b.dataset.cloudMetric)));
-  $("#btn-refresh-overview").addEventListener("click", () => { readAllCards(); loadOverview(); });
+  $$('[data-cloud-metric]').forEach(b => b.addEventListener("click", () => readCard(b.dataset.cloudMetric,true)));
+  $("#btn-refresh-overview").addEventListener("click", () => { readAllCards(true); loadOverview(true); });
   async function checkProfile(id) {
     const status = $(`[data-profile-status="${id}"]`);
     if (status) status.textContent = "检测中…";

@@ -109,15 +109,20 @@ def check_cloud_tools(page):
       if(cloudSnapshots.read('oci',{...a,region:'us-phoenix-1'},'usage'))throw new Error('snapshot crossed regions');
       const original=api,select=document.querySelector('#dashboard-account');
       const html=select.innerHTML,value=select.value,accounts=state.accounts;
-      let release;
+      let release,queries=0;
       try {
         state.accounts=[a]; select.innerHTML='<option value="1001">A</option>';
-        api=path=>path.endsWith('/usage')?new Promise(r=>release=r):Promise.resolve(path.endsWith('/traffic')?{total_gb:0,per_resource:{}}:path.endsWith('/regions')?{data:[]}:{limits:[]});
+        api=path=>{queries++;return path.endsWith('/usage')?new Promise(r=>release=r):Promise.resolve(path.endsWith('/traffic')?{total_gb:0,per_resource:{}}:path.endsWith('/regions')?{data:[]}:{limits:[]});};
         select.dispatchEvent(new Event('change'));
         const box=document.querySelector('#summary-usage');
         if(!box.textContent.includes('42.00')||!box.textContent.includes('缓存'))throw new Error('cache not visible before cloud reply');
+        if(release)throw new Error('cached usage automatically queried cloud');
+        document.querySelector('[data-cloud-metric="usage"]').click();
+        if(!release)throw new Error('manual refresh did not query cloud');
         release({currencies:{USD:43}}); await new Promise(r=>setTimeout(r,0));
         if(!box.textContent.includes('43.00')||box.textContent.includes('缓存'))throw new Error('fresh data did not replace snapshot');
+        release=null;select.dispatchEvent(new Event('change'));
+        if(release)throw new Error('reopening cached metric queried again');
         cloudSnapshots.clear();
         cloudSnapshots.write('oci',a,'usage',{currencies:{USD:44}},epoch);
         if(cloudSnapshots.read('oci',a,'usage'))throw new Error('logged-out request restored cache');

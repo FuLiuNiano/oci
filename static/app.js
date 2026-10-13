@@ -27,7 +27,7 @@ const cloudSnapshots = (() => {
       const k = key(provider, account, resource); if (!k) return null;
       try {
         const item = memory.get(k) || JSON.parse(sessionStorage.getItem(k) || 'null');
-        if (!item || !Number.isFinite(item.at) || Date.now() - item.at > 3600000) return null;
+        if (!item || !Number.isFinite(item.at)) return null;
         return JSON.parse(JSON.stringify(item));
       } catch { return null; }
     },
@@ -38,7 +38,7 @@ const cloudSnapshots = (() => {
       memory.set(k, item);
       try { sessionStorage.setItem(k, JSON.stringify(item)); } catch {}
     },
-    label(item) { return '缓存 · ' + new Date(item.at).toLocaleTimeString() + ' · 正在后台更新'; },
+    label(item, refreshing=false) { return '缓存 · ' + new Date(item.at).toLocaleString() + (refreshing ? ' · 正在更新' : ' · 点击刷新更新'); },
     clear() {
       epoch++; memory.clear();
       try { Object.keys(sessionStorage).filter(k => k.startsWith(prefix)).forEach(k => sessionStorage.removeItem(k)); } catch {}
@@ -139,7 +139,7 @@ async function doLogin() {
 
 const VIEW_LOADERS = {
   overview: () => loadOverview(),
-  instances: () => { if (state.instAccount) window.loadInstances(); },
+  instances: () => { if (state.instAccount) window.loadInstances(false, false); },
   launch: () => { window.loadTasks(); window.fillLaunchMeta(); },
   volumes: () => window.loadVolumes(),
   network: () => window.loadNetwork(),
@@ -196,9 +196,18 @@ async function reloadAccounts() {
 
 /* ---------- 概览 ---------- */
 
-async function loadOverview() {
+async function loadOverview(force=false) {
+  const scope={id:'overview',cache_revision:JSON.stringify(state.accounts.map(a=>[a.id,a.cache_revision]))};
+  const epoch=cloudSnapshots.epoch,cached=cloudSnapshots.read('panel',scope,'overview');
+  if(cached) { renderOverview(cached.data); if(!force) return; }
   try {
     const r = await api("/api/overview");
+    if(epoch!==cloudSnapshots.epoch) return;
+    cloudSnapshots.write('panel',scope,'overview',r,epoch);
+    renderOverview(r);
+  } catch (e) { toast(e.message, false); }
+}
+function renderOverview(r) {
     $("#ov-cards").innerHTML = `
       <div class="stat"><b>${r.accounts}</b><span>云账号</span></div>
       <div class="stat"><b>${r.instances}</b><span>实例</span></div>
@@ -209,7 +218,6 @@ async function loadOverview() {
       `<span class="chip">${esc(k)}: ${v}</span>`).join("") || `<span class="muted">还没有实例</span>`;
     $("#ov-errors").innerHTML = r.errors.map(e => `<div>⚠️ ${esc(e)}</div>`).join("")
       || `<span>全部账号连接正常</span>`;
-  } catch (e) { toast(e.message, false); }
 }
 
 $("#btn-panel-log").addEventListener("click", async () => {
@@ -585,7 +593,6 @@ function startTimers() {
   timersStarted = true;
   setInterval(async () => {
     if (document.hidden || $("#app").classList.contains("hide")) return;
-    if (curView === "instances" && $("#inst-auto").checked && state.instAccount) window.loadInstances(true);
     if (curView === "launch") window.loadTasks(true);
   }, 15000);
 }
