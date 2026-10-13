@@ -148,3 +148,14 @@ def test_unlinked_session_keeps_region_and_instance_ownership(account, field, va
     assert oci_ssh.sync_instance(account, machine())["updated"] == 0
     with pytest.raises(oci_service.OciError, match="其他区域或实例"):
         oci_ssh.validate_binding(account, machine(), sid)
+
+
+def test_cache_revision_isolated_and_changes_with_route_or_credentials(account):
+    before = store.account_public(account)
+    assert before['cache_revision'] == store.account_public(account)['cache_revision']
+    assert before['cache_revision'] != store.account_public({**account, 'id': account['id']+1})['cache_revision']
+    for changed in ({**account, 'region': 'us-phoenix-1'},
+                    {**account, 'params': {**account['params'], 'proxy_url': 'socks5h://test:1080'}},
+                    {**account, 'params': {**account['params'], 'private_key': 'changed-key'}}):
+        assert before['cache_revision'] != store.account_public(changed)['cache_revision']
+    assert 'private_key' not in before['params']

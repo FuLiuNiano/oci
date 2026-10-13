@@ -3,6 +3,10 @@ import json
 import os
 import sqlite3
 import threading
+import hashlib
+import hmac
+
+_cache_key = os.urandom(32)
 
 DATA_DIR = os.environ.get("PANEL_DATA_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data")
@@ -200,5 +204,7 @@ def account_public(acct):
         "traffic_limit_gb": acct["traffic_limit_gb"],
         "traffic_action": acct["traffic_action"],
         "created_at": acct["created_at"],
+        "cache_revision": hmac.new(_cache_key, json.dumps(
+            [acct["id"], acct["region"], p], sort_keys=True).encode(), hashlib.sha256).hexdigest(),
         "params": {k: v for k, v in p.items() if k in safe_keys},
     }

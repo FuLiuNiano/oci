@@ -61,14 +61,27 @@
   async function readCard(kind) {
     const account = $("#dashboard-account").value;
     if (!account) { toast("请先添加 OCI 账号", false); return; }
-    const generation = requestGeneration;
+    const generation = requestGeneration, epoch=cloudSnapshots.epoch;
+    const acct=state.accounts.find(a=>String(a.id)===account);
+    const cached=cloudSnapshots.read('oci',acct,kind);
     const box = $("#summary-" + kind), button = $(`[data-cloud-metric="${kind}"]`);
     if (button.disabled) return;
     button.disabled = true;
-    box.innerHTML = '<span class="loading-state">正在查询云端…</span>';
+    if(cached) { renderCard(kind,cached.data,box); box.insertAdjacentHTML('beforeend','<p class="muted">'+esc(cloudSnapshots.label(cached))+'</p>'); }
+    else box.innerHTML = '<span class="loading-state">正在查询云端…</span>';
     try {
       const r = await api(`/api/accounts/${account}/${kind}`);
-      if (generation !== requestGeneration) return;
+      if (generation !== requestGeneration || epoch!==cloudSnapshots.epoch) return;
+      cloudSnapshots.write('oci',acct,kind,r,epoch);
+      renderCard(kind,r,box);
+      box.insertAdjacentHTML('beforeend','<p class="muted">已更新 · '+esc(new Date().toLocaleTimeString())+'</p>');
+    } catch (e) { if (generation === requestGeneration && epoch===cloudSnapshots.epoch) {
+      if(cached) { renderCard(kind,cached.data,box); box.insertAdjacentHTML('beforeend',`<p class="query-error">缓存 · ${esc(new Date(cached.at).toLocaleTimeString())} · 更新失败：${esc(e.message)}</p>`); }
+      else box.innerHTML = `<span class="query-error">${esc(e.message)}</span>`;
+    } }
+    finally { if (generation === requestGeneration) button.disabled = false; }
+  }
+  function renderCard(kind,r,box) {
       if (kind === "usage") {
         box.innerHTML = Object.entries(r.currencies || {}).map(([currency, amount]) => `<strong>${esc(amount.toFixed(2))}<small>${esc(currency)}</small></strong>`).join("") || '<strong>暂无费用记录</strong>';
         box.insertAdjacentHTML("beforeend", '<p>最近 30 个完整 UTC 日 · 云端账单可能延迟</p>');
@@ -79,8 +92,6 @@
       } else {
         box.innerHTML = `<strong>${r.limits.length}<small>项配额</small></strong><div class="summary-details">${r.limits.map(x => `<p><b>${esc(x.name)}</b>${esc(x.used ?? "未知")} / ${esc(x.limit ?? "未知")}${x.ad ? " · " + esc(x.ad) : ""}</p>`).join("") || esc(r.cost_note || "没有匹配的配额")}</div>`;
       }
-    } catch (e) { if (generation === requestGeneration) box.innerHTML = `<span class="query-error">${esc(e.message)}</span>`; }
-    finally { if (generation === requestGeneration) button.disabled = false; }
   }
   function readAllCards() {
     if ($('#dashboard-account').value) return Promise.all(sections.map(readCard));

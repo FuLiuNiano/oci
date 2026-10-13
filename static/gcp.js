@@ -83,9 +83,21 @@
     await api(`/api/gcp/accounts/${a.id}` + query(a), {method:'DELETE'}); await loadAccounts();
   });
   async function refresh(a) {
-    message(`正在通过${a.route}读取 ${a.name}…`);
-    const data = await api(path(a,'instances') + query(a));
-    if (!valid(a)) return;
+    const epoch=cloudSnapshots.epoch;
+    const cached=cloudSnapshots.read('gcp',a,'instances');
+    if (cached && valid(a)) { renderSnapshot(a,cached.data,true); message(cloudSnapshots.label(cached)); }
+    else message(`正在通过${a.route}读取 ${a.name}…`);
+    try {
+      const data = await api(path(a,'instances') + query(a));
+      if (!valid(a) || epoch!==cloudSnapshots.epoch) return;
+      cloudSnapshots.write('gcp',a,'instances',data,epoch);
+      renderSnapshot(a,data);
+    } catch(error) {
+      if (valid(a) && epoch===cloudSnapshots.epoch && cached) message('缓存 · '+new Date(cached.at).toLocaleTimeString()+' · 更新失败：'+error.message);
+      else throw error;
+    }
+  }
+  function renderSnapshot(a,data,cached=false) {
     const s = data.overview;
     el('summary').innerHTML = `<b>实例 ${Number(s.total)}</b><b>运行 ${Number(s.running)}</b><span>免费额度候选 ${Number(s.free_tier_candidates)}（不保证免费）</span><span>${esc(Object.entries(s.zones).map(([z,n]) => `${z}: ${n}`).join(' · '))}</span>`;
     el('instances').innerHTML = data.instances.map(i => `<article class="card gcp-instance"><h3>${esc(i.name)} <small>${esc(i.status)}</small></h3><p class="muted">${esc(a.name)} · ${esc(a.route)}</p><dl><dt>可用区</dt><dd>${esc(i.zone)}</dd><dt>机型</dt><dd>${esc(i.machine_type)}</dd><dt>公网 IP</dt><dd>${esc(i.public_ip || '无')}</dd><dt>内网 IP</dt><dd>${esc(i.private_ip)}</dd><dt>磁盘</dt><dd>${esc(i.disks.map(d => d.name + (d.auto_delete ? '（随实例删除）' : '（保留）')).join('、'))}</dd></dl><div class="bar">${[['start','启动'],['stop','停止'],['reset','重启'],['change-ip','更换临时 IP'],['delete','删除（保留磁盘）']].map(([action,label]) => `<button data-action="${action}" class="ghost">${label}</button>`).join('')}</div></article>`).join('');
@@ -105,6 +117,7 @@
         await track(a,i.zone,op);
       }));
     });
+    if (cached) $$('button[data-action]',el('instances')).forEach(button => button.disabled=true);
     message(`已读取 ${data.instances.length} 台实例 · ${a.name} · ${a.route}`);
   }
   async function track(a,zone,op) {

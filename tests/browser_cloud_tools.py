@@ -97,3 +97,32 @@ def check_cloud_tools(page):
         select.dispatchEvent(new Event('change'));await tick();
       }
     }""")
+
+    page.evaluate("""async () => {
+      const a={id:1001,region:'ap-tokyo-1',cache_revision:'private-configuration-A'};
+      const b={id:1002,region:'ap-tokyo-1',cache_revision:'private-configuration-B'};
+      const epoch=cloudSnapshots.epoch;
+      cloudSnapshots.write('oci',a,'usage',{currencies:{USD:42}},epoch);
+      if(cloudSnapshots.read('oci',b,'usage'))throw new Error('snapshot crossed accounts');
+      if(cloudSnapshots.read('oci',{...a,cache_revision:'changed-proxy'},'usage'))throw new Error('snapshot survived route revision');
+      if(cloudSnapshots.read('aws',a,'usage'))throw new Error('snapshot crossed providers');
+      if(cloudSnapshots.read('oci',{...a,region:'us-phoenix-1'},'usage'))throw new Error('snapshot crossed regions');
+      const original=api,select=document.querySelector('#dashboard-account');
+      const html=select.innerHTML,value=select.value,accounts=state.accounts;
+      let release;
+      try {
+        state.accounts=[a]; select.innerHTML='<option value="1001">A</option>';
+        api=path=>path.endsWith('/usage')?new Promise(r=>release=r):Promise.resolve(path.endsWith('/traffic')?{total_gb:0,per_resource:{}}:path.endsWith('/regions')?{data:[]}:{limits:[]});
+        select.dispatchEvent(new Event('change'));
+        const box=document.querySelector('#summary-usage');
+        if(!box.textContent.includes('42.00')||!box.textContent.includes('缓存'))throw new Error('cache not visible before cloud reply');
+        release({currencies:{USD:43}}); await new Promise(r=>setTimeout(r,0));
+        if(!box.textContent.includes('43.00')||box.textContent.includes('缓存'))throw new Error('fresh data did not replace snapshot');
+        cloudSnapshots.clear();
+        cloudSnapshots.write('oci',a,'usage',{currencies:{USD:44}},epoch);
+        if(cloudSnapshots.read('oci',a,'usage'))throw new Error('logged-out request restored cache');
+      } finally {
+        api=original;state.accounts=accounts;select.innerHTML=html;select.value=value;
+        select.dispatchEvent(new Event('change'));
+      }
+    }""")

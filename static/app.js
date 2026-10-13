@@ -12,6 +12,40 @@ const state = {
   editingSessionId: null,
 };
 
+// Read-only snapshots, scoped to the authenticated panel and account configuration.
+const cloudSnapshots = (() => {
+  const prefix = 'oci-cloud-snapshot-v1:' + PANEL_PREFIX + ':';
+  const memory = new Map();
+  let epoch = 0;
+  const key = (provider, account, resource) => {
+    const revision = account?.cache_revision || account?.revision;
+    return revision ? prefix + JSON.stringify([provider, account.id, account.region || account.project_id || '', revision, resource]) : null;
+  };
+  return {
+    get epoch() { return epoch; },
+    read(provider, account, resource) {
+      const k = key(provider, account, resource); if (!k) return null;
+      try {
+        const item = memory.get(k) || JSON.parse(sessionStorage.getItem(k) || 'null');
+        if (!item || !Number.isFinite(item.at) || Date.now() - item.at > 3600000) return null;
+        return JSON.parse(JSON.stringify(item));
+      } catch { return null; }
+    },
+    write(provider, account, resource, data, expectedEpoch) {
+      if (expectedEpoch !== epoch) return;
+      const k = key(provider, account, resource); if (!k) return;
+      const item = {at:Date.now(), data:JSON.parse(JSON.stringify(data))};
+      memory.set(k, item);
+      try { sessionStorage.setItem(k, JSON.stringify(item)); } catch {}
+    },
+    label(item) { return '缓存 · ' + new Date(item.at).toLocaleTimeString() + ' · 正在后台更新'; },
+    clear() {
+      epoch++; memory.clear();
+      try { Object.keys(sessionStorage).filter(k => k.startsWith(prefix)).forEach(k => sessionStorage.removeItem(k)); } catch {}
+    }
+  };
+})();
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -74,6 +108,7 @@ const PLATFORM_LABEL = { oci: "甲骨文" };
 /* ---------- 登录 / 启动 ---------- */
 
 function showLogin() {
+  cloudSnapshots.clear();
   $("#app").classList.add("hide");
   $("#hdr-user").classList.add("hide");
   $("#view-login").classList.remove("hide");
@@ -539,6 +574,7 @@ $("#btn-login").addEventListener("click", doLogin);
 $("#login-user").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
 $("#login-pass").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
 $("#btn-logout").addEventListener("click", async () => {
+  showLogin();
   await api("/api/logout", { method: "POST" }).catch(() => {});
   location.reload();
 });

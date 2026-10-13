@@ -113,6 +113,9 @@ server.run()
                       api=(path,opts)=>path.includes('/aws/accounts/') && path.includes('/instances?') ? new Promise(resolve=>window.awsLateReply=resolve) : window.awsOriginalApi(path,opts);
                     }""")
                     page.click('#aws-refresh'); page.wait_for_function('!!window.awsLateReply')
+                    assert '缓存' in page.locator('#aws-message').inner_text()
+                    assert page.locator('.aws-instance').count()>0
+                    assert page.evaluate("[...document.querySelectorAll('.aws-instance button[data-action]')].every(b=>b.disabled)")
                     page.evaluate('() => { api=window.awsOriginalApi; }')
                     page.select_option('#aws-account',label='AWS proxy edited · ap-northeast-1')
                     page.evaluate("""() => { window.awsLateReply({instances:[{name:'wrong-account'}],overview:{total:1,running:1}}); api=window.awsOriginalApi; }""")

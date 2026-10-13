@@ -41,18 +41,25 @@
 
   let instanceRequest = 0;
   window.loadInstances = async function (silent = false) {
+    const epoch=cloudSnapshots.epoch;
     const request = ++instanceRequest, accountValid = accountGuard('#inst-account');
-    const valid = () => request === instanceRequest && accountValid();
+    const valid = () => request === instanceRequest && accountValid() && epoch===cloudSnapshots.epoch;
     if (!state.instAccount) return;
     if (!silent) $("#inst-summary").textContent = "加载中…";
     try {
       const acct = acctById(instAccount());
       if (!acct) return;
       const platform = acct.platform;
+      const snapshot=cloudSnapshots.read('oci',acct,'instances');
+      if(snapshot) {
+        renderInstances(platform,acct,snapshot.data.instances,snapshot.data.boot);
+        $$('#inst-cards button').forEach(button => button.disabled=true);
+        $('#inst-summary').textContent=cloudSnapshots.label(snapshot);
+      }
       const url = platform === "oci"
         ? `/api/cloud/oci/instances?account_id=${acct.id}`
         : `/api/cloud/${platform}/instances?account_id=${acct.id}`;
-      const cachedBoot = bootCache.get(acct.id);
+      const cachedBoot = bootCache.get(acct.id) || (snapshot ? {data:snapshot.data.boot || [],at:snapshot.at} : null);
       const bootRequest = cachedBoot && Date.now() - cachedBoot.at < 120000
         ? Promise.resolve({data: cachedBoot.data})
         : api(`/api/oci/boot-volumes?account_id=${acct.id}`)
@@ -61,11 +68,16 @@
       const r = await api(url);
       if (!valid() || instAccount() !== acct.id) return;
       renderInstances(platform, acct, r.data, cachedBoot?.data || []);
-      $("#inst-summary").textContent = "";
+      cloudSnapshots.write('oci',acct,'instances',{instances:r.data,boot:cachedBoot?.data || []},epoch);
+      $("#inst-summary").textContent = "已更新 · " + new Date().toLocaleTimeString();
       const boot = await bootRequest;
-      if (valid() && instAccount() === acct.id) renderInstances(platform, acct, r.data, boot.data);
+      if (valid() && instAccount() === acct.id) {
+        renderInstances(platform, acct, r.data, boot.data);
+        cloudSnapshots.write('oci',acct,'instances',{instances:r.data,boot:boot.data},epoch);
+        $('#inst-summary').textContent='已更新 · '+new Date().toLocaleTimeString();
+      }
     } catch (e) {
-      if (valid() && !silent) { $("#inst-summary").textContent = e.message; toast(e.message, false); }
+      if (valid()) { $("#inst-summary").textContent = "更新失败：" + e.message; if (!silent) toast(e.message, false); }
     }
   };
 

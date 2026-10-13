@@ -86,9 +86,21 @@
     if (valid(a)) message(`认证成功 · AWS 账号 ${identity.account_id} · ${identity.arn} · ${a.route}。仍需具备 Lightsail 权限。`);
   });
   async function refresh(a) {
-    message(`正在通过${a.route}读取 ${a.name} / ${a.region}…`);
-    const data = await api(path(a,'instances') + query(a));
-    if (!valid(a)) return;
+    const epoch=cloudSnapshots.epoch;
+    const cached=cloudSnapshots.read('aws',a,'instances');
+    if (cached && valid(a)) { renderSnapshot(a,cached.data,true); message(cloudSnapshots.label(cached)); }
+    else message(`正在通过${a.route}读取 ${a.name}…`);
+    try {
+      const data = await api(path(a,'instances') + query(a));
+      if (!valid(a) || epoch!==cloudSnapshots.epoch) return;
+      cloudSnapshots.write('aws',a,'instances',data,epoch);
+      renderSnapshot(a,data);
+    } catch(error) {
+      if (valid(a) && epoch===cloudSnapshots.epoch && cached) message('缓存 · '+new Date(cached.at).toLocaleTimeString()+' · 更新失败：'+error.message);
+      else throw error;
+    }
+  }
+  function renderSnapshot(a,data,cached=false) {
     instances = data.instances;
     el('summary').textContent = `实例 ${data.overview.total} · 运行 ${data.overview.running}`;
     el('instances').innerHTML = instances.length ? instances.map(i => `<article class="card aws-instance"><h3>${esc(i.name)} <small>${esc(i.status)}</small></h3><p class="muted">${esc(a.name)} · ${esc(a.route)}</p><dl><dt>可用区</dt><dd>${esc(i.zone)}</dd><dt>系统 / 套餐</dt><dd>${esc(i.blueprint)} / ${esc(i.machine_type)}</dd><dt>CPU / 内存</dt><dd>${esc(i.cpus ?? '未知')} vCPU / ${esc(i.memory_gb ?? '未知')} GB</dd><dt>公网 IPv4</dt><dd>${esc(i.public_ip || '无')}${i.static_ip ? '（静态）' : ''}</dd><dt>公网 IPv6</dt><dd>${esc(i.ipv6.join('、') || '无')}</dd><dt>内网 IP</dt><dd>${esc(i.private_ip)}</dd><dt>SSH 用户</dt><dd>${esc(i.username)} · ${esc(i.key_name)}</dd></dl><div class="bar">${[['start','启动'],['stop','停止'],['reboot','重启'],['snapshot','创建快照'],['metrics','CPU / 流量'],['delete','删除实例']].map(([action,label])=>`<button class="ghost" data-action="${action}">${label}</button>`).join('')}</div></article>`).join('') : '<p class="muted">当前区域暂无 Lightsail 实例。</p>';
@@ -113,6 +125,7 @@
         if (valid(a)) await refresh(a);
       }));
     });
+    if (cached) $$('button[data-action]',el('instances')).forEach(button => button.disabled=true);
     message(`已读取 ${instances.length} 台 Lightsail · ${a.name} · ${a.region} · ${a.route}`);
   }
   el('refresh').onclick = () => guarded(() => refresh(capture()));
